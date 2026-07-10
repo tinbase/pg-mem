@@ -1,3 +1,11 @@
+> ## `@tinbase/pg-mem` — fork notice
+>
+> This package is a **fork of [`pg-mem`](https://github.com/oguimbal/pg-mem)** by Olivier Guimbal, maintained for [tinbase](https://github.com/tinbase/tinbase). It extends Postgres conformance well beyond upstream — **PL/pgSQL, triggers, row-level security, correlated & scalar subqueries, MERGE, range & full-text types, declarative partitioning, `information_schema` constraints, dollar-quoted strings, array slicing**, and more.
+>
+> The additions are proposed upstream in **[oguimbal/pg-mem#476](https://github.com/oguimbal/pg-mem/pull/476)**; this scoped package exists so tinbase can depend on them before that merges. Same **MIT** license. If you don't need these additions, use upstream [`pg-mem`](https://www.npmjs.com/package/pg-mem).
+>
+> API is otherwise identical: `import { newDb } from '@tinbase/pg-mem'`.
+
 <p align="center">
   <a href="https://npmjs.org/package/pg-mem"><img src="http://img.shields.io/npm/v/pg-mem.svg"></a>
   <a href="https://npmjs.org/package/pg-mem"><img src="https://img.shields.io/npm/dm/pg-mem.svg"></a>
