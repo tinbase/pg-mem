@@ -1,10 +1,86 @@
 import { _ITable, _ISelection, IValue, _IIndex, _IDb, IndexKey, setId, _Transaction, _ISchema } from '../../interfaces-private';
 import { Schema, nil } from '../../interfaces';
+import { toSql } from 'pgsql-ast-parser';
 import { Types } from '../../datatypes';
 import { TableIndex } from '../table-index';
 import { ReadOnlyTable } from '../readonly-table';
 
 const IS_SCHEMA = Symbol('_is_colmun');
+/**
+ * The column's own metadata, when the relation has any.
+ *
+ * Only real tables carry ColRefs; views and function-call tables expose values without column
+ * definitions, so callers must tolerate nil rather than assume a table.
+ */
+function columnRef(
+    table: _ITable,
+    columnName: string | nil
+): { notNull?: boolean; default?: IValue | nil } | nil {
+    if (!columnName) {
+        return null;
+    }
+    const getter = (table as any).getColumnRef;
+    if (typeof getter !== 'function') {
+        return null;
+    }
+    try {
+        return getter.call(table, columnName, true) ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Postgres reports column_default as SQL text, or null when there is none.
+ *
+ * Rendered from the retained AST (see ColRef.defaultExpr) — the built evaluator cannot supply it,
+ * because its `hash` is a digest for anything that is not a literal.
+ */
+function defaultExpressionOf(table: _ITable, columnName: string | nil): string | null {
+    const ref = columnRef(table, columnName);
+    if (!ref?.default) {
+        return null;
+    }
+    const ast = (ref as any).defaultExpr;
+    if (!ast) {
+        return null;
+    }
+    try {
+        // toSql renders defensively — `now()` comes out as `(now () )`. Postgres reports `now()`, and
+        // consumers compare these strings, so collapse the padding and drop one layer of wrapping
+        // parens. Deliberately conservative: only a paren pair that encloses the WHOLE expression is
+        // removed, so `(a + b) * 2` is left alone.
+        const rendered = toSql
+            .expr(ast)
+            .replace(/\s+/g, ' ')
+            .replace(/\(\s+/g, '(')
+            .replace(/\s+\)/g, ')')
+            // `now ()` → `now()`: toSql puts a space between a function name and its arg list.
+            .replace(/([A-Za-z_][\w.]*)\s+\(/g, '$1(')
+            .trim();
+        return stripWrappingParens(rendered);
+    } catch {
+        return null;
+    }
+}
+
+/** Remove one paren pair only when it wraps the entire expression. */
+function stripWrappingParens(sql: string): string {
+    if (!sql.startsWith('(') || !sql.endsWith(')')) {
+        return sql;
+    }
+    let depth = 0;
+    for (let i = 0; i < sql.length; i++) {
+        if (sql[i] === '(') depth++;
+        else if (sql[i] === ')') {
+            depth--;
+            // Closed before the end → the parens are not wrapping the whole thing.
+            if (depth === 0 && i !== sql.length - 1) return sql;
+        }
+    }
+    return sql.slice(1, -1).trim();
+}
+
 export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
 
     get ownSymbol() {
@@ -92,7 +168,14 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
             table_name: table.name,
             column_name: t.id,
             ordinal_position: i,
-            is_nullable: 'NO',
+            // Read from the column itself rather than hardcoded.
+            //
+            // These were 'NO' and null for every column, which is worse than missing: a consumer
+            // generating types off information_schema would mark a nullable column non-null and its
+            // callers would skip null checks the database will hand them. Tables that expose no
+            // column refs (views, function-call tables) still fall back to the permissive answer.
+            is_nullable: columnRef(table, t.id)?.notNull ? 'NO' : 'YES',
+            column_default: defaultExpressionOf(table, t.id),
             data_type: t.type.primary, // <== todo
             numeric_precision: null, // <== todo
             numeric_precision_radix: null, // <== todo
