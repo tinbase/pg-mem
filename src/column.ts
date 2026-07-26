@@ -1,7 +1,7 @@
 import { _Column, IValue, _IIndex, NotSupported, _Transaction, QueryError, _IType, SchemaField, ChangeHandler, nil, ISubscription, DropHandler } from './interfaces-private';
 import type { MemoryTable } from './table';
 import { Evaluator } from './evaluator';
-import { ColumnConstraint, AlterColumn } from 'pgsql-ast-parser';
+import { ColumnConstraint, AlterColumn, Expr, toSql } from 'pgsql-ast-parser';
 import { ignore, nullIsh } from './utils';
 import { columnEvaluator } from './transforms/selection';
 import { BIndex } from './schema/btree-index';
@@ -15,6 +15,15 @@ import { GeneratedComputedConstraint } from './constraints/generated-from-expr';
 export class ColRef implements _Column {
     comment: string | nil;
     default: IValue | nil;
+    /**
+     * The default's source AST, kept alongside the built value.
+     *
+     * `default` is an evaluator: its `hash` is a digest for anything non-literal (`now()` hashes to
+     * a sha1), so the original expression cannot be recovered from it. Postgres reports
+     * `information_schema.columns.column_default` as SQL text, so the AST has to be retained to
+     * answer that at all.
+     */
+    defaultExpr: Expr | nil;
     notNull = false;
     generated = false;
     usedInIndexes = new Set<BIndex>();
@@ -141,16 +150,19 @@ export class ColRef implements _Column {
             switch (alter.type) {
                 case 'drop default':
                     this.default = null;
+                    this.defaultExpr = null;
                     break;
                 case 'set default':
                     if (alter.default.type === 'null') {
                         this.default = null;
+                        this.defaultExpr = null;
                         break;
                     }
                     const df = buildValue(alter.default);
                     if (!df.isConstant) {
                         throw new QueryError('cannot use column references in default expression');
                     }
+                    this.defaultExpr = alter.default;
                     if (alter.updateExisting) {
                         this.table.remapData(t, x => {
                             x[this.expression.id!] = df.get();
