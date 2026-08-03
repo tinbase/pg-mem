@@ -164,7 +164,10 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
         ret = {
             ...ret,
             table_catalog: 'pgmem',
-            table_schema: 'public',
+            // The owning schema, not a hardcoded 'public' - see table-list.ts.
+            // Hardcoding it merged the columns of same-named tables in different
+            // schemas into one apparent table.
+            table_schema: table.ownerSchema.name,
             table_name: table.name,
             column_name: t.id,
             ordinal_position: i,

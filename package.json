@@ -1,6 +1,6 @@
 {
   "name": "@tinbase/pg-mem",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Fork of pg-mem with extended Postgres conformance (PL/pgSQL, triggers, RLS, correlated subqueries, MERGE, ranges, full-text, partitioning, ...). Tracks oguimbal/pg-mem; pending upstream PR #476.",
   "main": "index.js",
   "publishConfig": {
