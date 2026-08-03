@@ -115,6 +115,12 @@ function _buildValueReal(val: Expr): IValue {
             // an integer literal that overflows a safe JS number is a bigint (as in pg),
             // carried through valueText with full precision
             if (val.valueText) {
+                // `value` is the lossy JS number the parser also provides; mark it
+                // read so the AST-completeness check doesn't reject the statement
+                // for an unconsumed node. Without this, `select 9007199254740992`
+                // worked (no check on that path) while inserting the same literal
+                // failed as "parts have not been read by the query planner".
+                ignore(val.value);
                 return new Evaluator(Types.bigint, null, val.valueText, null, val.valueText);
             }
             return Value.number(val.value, Types.integer);
