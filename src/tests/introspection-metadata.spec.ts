@@ -279,4 +279,74 @@ describe('introspection metadata', () => {
         });
     });
 
+
+    // This view existed but enumerated nothing, so it was always empty. A
+    // consumer joining against it to resolve foreign keys got zero rows and
+    // concluded there were no relationships - the same confidently-wrong shape as
+    // the constants above, and it is what pushed tinbase off this view entirely.
+    describe('information_schema.constraint_column_usage', () => {
+
+        beforeEach(() => {
+            none(`create table authors (id int primary key, code text unique)`);
+            none(`create table books (id int primary key, author_id int references authors(id))`);
+        });
+
+        it('is not empty', () => {
+            expect(many(`select * from information_schema.constraint_column_usage`).length).toBeGreaterThan(0);
+        });
+
+        // The distinction that makes this view worth having: key_column_usage has
+        // the referencing column, this has the referenced one.
+        it('reports a foreign key against the column it references, not the one it constrains', () => {
+            const fk = many(`select table_name, column_name from information_schema.constraint_column_usage
+                             where constraint_name = 'books_author_id_fkey'`);
+            expect(fk).toEqual([{ table_name: 'authors', column_name: 'id' }]);
+
+            const kcu = many(`select table_name, column_name from information_schema.key_column_usage
+                              where constraint_name = 'books_author_id_fkey'`);
+            expect(kcu).toEqual([{ table_name: 'books', column_name: 'author_id' }]);
+        });
+
+        it('reports primary key and unique constraints against their own columns', () => {
+            const rows = many(`select constraint_name, table_name, column_name
+                               from information_schema.constraint_column_usage
+                               where constraint_name in ('authors_pkey', 'authors_code_key')`);
+            expect(rows).toEqual(expect.arrayContaining([
+                { constraint_name: 'authors_pkey', table_name: 'authors', column_name: 'id' },
+                { constraint_name: 'authors_code_key', table_name: 'authors', column_name: 'code' },
+            ]));
+        });
+
+        it('is empty when nothing declares a constraint', () => {
+            const db2 = newDb();
+            db2.public.none(`create table plain (a text)`);
+            expect(db2.public.many(`select * from information_schema.constraint_column_usage`)).toEqual([]);
+        });
+    });
+
+    // pgsql-ast-parser carries integers past 2^53 in `valueText` with full
+    // precision, and the expression builder reads it - but never marked the lossy
+    // `value` node as consumed, so the AST-completeness check rejected the
+    // statement. `select 9007199254740992` worked (no check on that path) while
+    // inserting the same literal failed as "parts have not been read".
+    describe('integer literals beyond 2^53', () => {
+
+        it('inserts and round-trips them exactly', () => {
+            none(`create table big (id serial primary key, v bigint)`);
+            none(`insert into big (v) values (9007199254740992)`);
+            none(`insert into big (v) values (9007199254740993)`);
+            none(`insert into big (v) values (9223372036854775807)`);
+            // exact, not rounded to ...992: bigint is held as a string
+            expect(many(`select v from big order by id`).map(r => r.v))
+                .toEqual(['9007199254740992', '9007199254740993', '9223372036854775807']);
+        });
+
+        it('still handles literals inside the safe range', () => {
+            none(`create table small (id serial primary key, v bigint)`);
+            none(`insert into small (v) values (9007199254740991)`);
+            none(`insert into small (v) values (42)`);
+            expect(many(`select v from small order by id`).map(r => r.v)).toEqual(['9007199254740991', '42']);
+        });
+    });
+
 });
