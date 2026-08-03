@@ -171,4 +171,58 @@ describe('introspection metadata', () => {
             expect(many(`select * from pg_trigger`)).toEqual([]);
         });
     });
+
+    // Both catalogues hardcoded table_schema:'public' while their enumeration
+    // already walked every schema, so anything outside public was reported as
+    // living in public - and two same-named tables in different schemas became
+    // one indistinguishable thing. Same failure mode as the constants above:
+    // confidently wrong rather than absent.
+    describe('schema qualification', () => {
+
+        beforeEach(() => {
+            none(`create schema auth`);
+            none(`create table auth.users (id text primary key, email text)`);
+            none(`create table users (id text primary key, nickname text)`);
+            none(`create table widgets (id text primary key)`);
+        });
+
+        it('reports the owning schema, not always public', () => {
+            const rows = many(`select table_schema, table_name from information_schema.tables where table_name = 'users'`);
+            expect(rows.map(r => r.table_schema).sort()).toEqual(['auth', 'public']);
+        });
+
+        it('filtering by table_schema excludes other schemas', () => {
+            const names = many(`select table_name from information_schema.tables where table_schema = 'public'`)
+                .map(r => r.table_name).sort();
+            expect(names).toEqual(['users', 'widgets']);
+        });
+
+        it('attributes columns to the table\'s own schema', () => {
+            const rows = many(`select table_schema, column_name from information_schema.columns where table_name = 'users'`);
+            const bySchema = new Map<string, string[]>();
+            for (const r of rows) {
+                bySchema.set(r.table_schema, [...(bySchema.get(r.table_schema) ?? []), r.column_name].sort());
+            }
+            expect(bySchema.get('public')).toEqual(['id', 'nickname']);
+            expect(bySchema.get('auth')).toEqual(['email', 'id']);
+        });
+
+        // itemsByTable is inherited from ReadOnlyTable, which yields one row per
+        // *column* - right for the columns view, wrong here. Filtering on
+        // table_name returned a table once per column it had, while an
+        // unfiltered scan of the same view was correct.
+        it('yields one row per table when filtering by name, not one per column', () => {
+            expect(many(`select 1 from information_schema.tables where table_name = 'widgets'`).length).toBe(1);
+            // auth.users has 2 columns, public.users has 2: two rows, not four
+            expect(many(`select 1 from information_schema.tables where table_name = 'users'`).length).toBe(2);
+            expect(many(`select 1 from information_schema.tables where table_schema = 'public' and table_name = 'users'`).length).toBe(1);
+        });
+
+        it('agrees with an unfiltered scan', () => {
+            const all = many(`select table_schema, table_name from information_schema.tables`)
+                .map(r => `${r.table_schema}.${r.table_name}`).sort();
+            expect(all).toEqual(['auth.users', 'public.users', 'public.widgets']);
+        });
+    });
+
 });
