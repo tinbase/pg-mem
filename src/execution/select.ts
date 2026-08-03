@@ -241,6 +241,41 @@ function buildRawSelectSubject(p: SelectFromStatement): _ISelection | nil {
 }
 
 
+/**
+ * Resolve a positional ORDER BY / GROUP BY reference to the select-list item it
+ * names, 1-based, as the SQL standard defines it.
+ *
+ * Only a *bare* integer literal is an ordinal. `order by 1 + 0` is an ordinary
+ * constant expression that sorts nothing, in Postgres as much as here, so the
+ * check is on the literal node rather than on the evaluated value.
+ *
+ * Without this the integer was built as a constant, which is the same value for
+ * every row, so the clause silently did nothing and rows came back in insertion
+ * order - frequently indistinguishable from being sorted, in small fixtures.
+ */
+function resolvePositional(
+    ordinal: number,
+    columns: SelectedColumn[] | nil,
+    sel: _ISelection,
+    clause: 'ORDER BY' | 'GROUP BY',
+): Expr {
+    // `select *` (or a list containing one) has no expression to point at, so
+    // resolve against the pre-projection columns, which is what `*` expands to.
+    const star = !columns?.length || columns.some(c => c.expr.type === 'ref' && c.expr.name === '*');
+    const size = star ? sel.columns.length : columns!.length;
+    if (ordinal < 1 || ordinal > size || !Number.isInteger(ordinal)) {
+        throw new QueryError(`${clause} position ${ordinal} is not in select list`, '42P10');
+    }
+    if (star) {
+        const name = sel.columns[ordinal - 1].id;
+        if (!name) {
+            throw new QueryError(`${clause} position ${ordinal} is not in select list`, '42P10');
+        }
+        return { type: 'ref', name };
+    }
+    return columns![ordinal - 1].expr;
+}
+
 function buildRawSelect(p: SelectFromStatement): _ISelection {
     const distinct = !p.distinct || p.distinct === 'all'
         ? null
@@ -260,7 +295,14 @@ function buildRawSelect(p: SelectFromStatement): _ISelection {
     // ... but you cant use aliases in a computation (only in simple order by statements)
     // this hack reproduces this behaviour
     const aliases = new Map(notNil(p.columns?.filter(c => !!c.alias?.name)).map(c => [c.alias!.name, c.expr]));
+    // bound to a const so the closures below see it as non-nil: TS widens a
+    // captured `let` back to its declared type regardless of narrowing here
+    const source = sel;
     const orderBy = modifyIfNecessary(p.orderBy ?? [], o => {
+        // a bare integer is a select-list position, not a constant
+        if (o.by.type === 'integer') {
+            return { ...o, by: resolvePositional(o.by.value, p.columns, source, 'ORDER BY') };
+        }
         const by = o.by.type === 'ref' && !o.by.table && aliases.get(o.by.name);
         return by ? { ...o, by } : null;
     });
@@ -268,6 +310,9 @@ function buildRawSelect(p: SelectFromStatement): _ISelection {
 
     if (p.groupBy) {
         const groupBy = modifyIfNecessary(p.groupBy ?? [], o => {
+            if (o.type === 'integer') {
+                return resolvePositional(o.value, p.columns, source, 'GROUP BY');
+            }
             const group = o.type === 'ref' && !o.table && !sel?.getColumn(o.name, true) && aliases.get(o.name);
             return group || null;
         });
