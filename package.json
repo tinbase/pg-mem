@@ -22,7 +22,7 @@
     "cover": "NODE_OPTIONS=--openssl-legacy-provider cross-env NODE_ENV=coverage nyc --reporter=lcov --reporter=text bun test"
   },
   "author": "Olivier Guimbal",
-  "repository": "https://github.com/sanketsahu/pg-mem",
+  "repository": "https://github.com/tinbase/pg-mem",
   "issues": "https://github.com/oguimbal/pg-mem/issues",
   "keywords": [
     "postgres",
