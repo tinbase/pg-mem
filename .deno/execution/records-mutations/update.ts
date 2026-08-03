@@ -1,7 +1,7 @@
 import { _ITable, _Transaction, _Explainer, _ISchema, asTable, _ISelection, _IIndex, _IStatement } from '../../interfaces-private.ts';
 import { applyReadRls, checkWriteRls } from '../rls-enforce.ts';
 import { fireRowTriggers, fireStatementTriggers, SKIP_ROW } from '../triggers.ts';
-import { UpdateStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { UpdateStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { MutationDataSourceBase, Setter, createSetter } from './mutation-base.ts';
 import { buildCtx } from '../../parser/context.ts';
 import { buildSelect } from '../select.ts';

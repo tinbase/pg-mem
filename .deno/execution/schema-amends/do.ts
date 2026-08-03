@@ -1,5 +1,5 @@
 import { _IStatementExecutor, _Transaction, StatementResult, _IStatement, CompiledFunction, _ISchema } from '../../interfaces-private.ts';
-import { DoStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { DoStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ExecHelper } from '../../execution/exec-utils.ts';
 import { pushExecutionCtx } from '../../utils.ts';
 

@@ -3,7 +3,7 @@ import { Types } from '../../datatypes/index.ts';
 import {
     RangeType, RANGE_ADAPTERS, parseRangeLiteral, canonicalize,
     rangeContainsRange, rangeContainsElem, rangesOverlap,
-} from '../../datatypes/t-range';
+} from '../../datatypes/t-range.ts';
 
 /**
  * Registers the built-in range types (int4range, int8range, numrange, daterange,

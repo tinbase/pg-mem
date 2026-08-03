@@ -1,5 +1,5 @@
 import { _ISchema, _Transaction, _IStatementExecutor, _IStatement, asIndex, NotSupported } from '../../interfaces-private.ts';
-import { AlterIndexStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { AlterIndexStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ExecHelper } from '../exec-utils.ts';
 import { ignore } from '../../utils.ts';
 

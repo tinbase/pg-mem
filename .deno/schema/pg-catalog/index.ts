@@ -13,6 +13,7 @@ import { PgUserTable } from './pg-user-list.ts';
 import { PgRolesTable } from './pg-roles-list.ts';
 import { PgPoliciesTable } from './pg-policies-list.ts';
 import { PgIndexesTable } from './pg-indexes-list.ts';
+import { PgTriggerTable } from './pg-trigger-list.ts';
 import { PgTablesTable } from './pg-tables-list.ts';
 import { allFunctions } from '../../functions/index.ts';
 import { PgRange } from './pg-range.ts';
@@ -65,6 +66,7 @@ export function setupPgCatalog(db: _IDb) {
     new PgNamespaceTable(catalog).register();
     new PgAttributeTable(catalog).register();
     new PgIndexTable(catalog).register();
+    new PgTriggerTable(catalog).register();
     new PgTypeTable(catalog).register();
     new PgRange(catalog).register();
     new PgProc(catalog).register();

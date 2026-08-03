@@ -52,7 +52,12 @@ export class TablesSchema extends ReadOnlyTable implements _ITable {
         }
         const ret = {
             table_catalog: 'pgmem',
-            table_schema: 'public',
+            // The owning schema, not a hardcoded 'public'. enumerate() already
+            // walks every schema, so hardcoding this reported auth.users,
+            // storage.objects and the like as though they lived in public -
+            // tables nothing could then address, and two same-named tables in
+            // different schemas became indistinguishable to any consumer.
+            table_schema: t.ownerSchema.name,
             table_name: t.name,
             table_type: 'BASE TABLE',
             self_referencing_column_name: null,
@@ -65,8 +70,31 @@ export class TablesSchema extends ReadOnlyTable implements _ITable {
             commit_action: null,
             [IS_SCHEMA]: true,
         };
-        setId(ret, '/schema/table/' + t.name);
+        // Schema-qualified, as columns-list already does: two same-named tables
+        // in different schemas are distinct rows and must not share an id.
+        setId(ret, `/schema/${t.ownerSchema.name}/table/${t.name}`);
         return ret;
+    }
+
+    /**
+     * One row per matching table.
+     *
+     * ReadOnlyTable's inherited version yields one row per *column*, which is
+     * what columns-list wants and this view does not: filtering on table_name
+     * returned a table once per column it had, so a 17-column table appeared 17
+     * times while an unfiltered scan of the same view was correct.
+     */
+    *itemsByTable(table: string | _ITable, t: _Transaction): IterableIterator<any> {
+        if (typeof table === 'string') {
+            for (const s of this.db.listSchemas()) {
+                const got = s.getTable(table, true);
+                if (got) {
+                    yield this.make(got);
+                }
+            }
+        } else {
+            yield this.make(table);
+        }
     }
 
     hasItem(value: any): boolean {

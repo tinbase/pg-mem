@@ -1,5 +1,5 @@
 import { _ITable, _Transaction, _ISelection, _IStatement, _IStatementExecutor, StatementResult, asTable, QueryError, nil, IValue, Row, getId } from '../../interfaces-private.ts';
-import { MergeStatement, MergeAction, Expr } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { MergeStatement, MergeAction, Expr } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { buildSelect } from '../select.ts';
 import { Selection } from '../../transforms/selection.ts';
 import { JoinSelection } from '../../transforms/join.ts';

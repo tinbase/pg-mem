@@ -1,5 +1,5 @@
 import { _ISchema, _Transaction, _ITable, _IStatementExecutor, asTable, StatementResult, _IStatement } from '../../interfaces-private.ts';
-import { CreatePolicyStatement, DropPolicyStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreatePolicyStatement, DropPolicyStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ignore } from '../../utils.ts';
 import { ExecHelper } from '../exec-utils.ts';
 

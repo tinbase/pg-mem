@@ -1,6 +1,6 @@
 import { TransformBase } from './transform-base.ts';
 import { _ISelection, _Transaction, IValue, _IIndex, _Explainer, _SelectExplanation, _IType, Stats, Row } from '../interfaces-private.ts';
-import { CallOverFrame, Expr, ExprCall, ExprRef, FrameBound, nil, OrderByStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CallOverFrame, Expr, ExprCall, ExprRef, FrameBound, nil, OrderByStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { buildValue } from '../parser/expression-builder.ts';
 import { NotSupported, QueryError } from '../interfaces.ts';
 import { Types } from '../datatypes/index.ts';

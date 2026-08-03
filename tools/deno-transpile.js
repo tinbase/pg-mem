@@ -74,7 +74,16 @@ if (process.argv.includes('--copy')) {
         'moo': 'https://deno.land/x/moo@0.5.1-deno.2/mod.ts',
         'nearley': 'https://deno.land/x/nearley@2.19.7-deno/mod.ts',
         'lru-cache': 'https://deno.land/x/lru_cache@6.0.0-deno.4/mod.ts',
-        'pgsql-ast-parser': 'https://deno.land/x/pgsql_ast_parser@' + package.dependencies['pgsql-ast-parser'].substr(1) + '/mod.ts',
+        // An npm: specifier rather than a deno.land/x URL. This fork depends on
+        // its own parser build via an npm alias
+        // ("npm:@tinbase/pgsql-ast-parser@^12.1.0"), which is not published to
+        // deno.land at all, so no URL of that shape could resolve. The previous
+        // `.substr(1)` also assumed a bare semver range like "^12.1.0" and, given
+        // the alias, stripped the "n" off "npm:" to emit
+        // "pgsql_ast_parser@pm:@tinbase/...". Deno has understood npm: specifiers
+        // since 1.28, and taking the spec straight from package.json means the
+        // version can no longer drift from what npm resolves.
+        'pgsql-ast-parser': 'npm:' + package.dependencies['pgsql-ast-parser'].replace(/^npm:/, ''),
         // 'lru-cache': {
         //     what: x => `{${x}}`,
         //     where: 'https://deno.land/x/lru_cache@6.0.0-deno.3/mod.ts',
@@ -92,7 +101,13 @@ if (process.argv.includes('--copy')) {
     }
     function handleTs(ipath, rpath) {
         const content = fs.readFileSync(ipath, 'utf-8');
-        const newContent = content.replace(/^(import|export)\s+([^\n]+)\s+from\s+['"]([^'"]+)['"];?$/mg, (_, op, what, where) => {
+        // [\s\S]+? rather than [^\n]+ so a multi-line specifier list matches too.
+    // With the newline-excluding form, an import written across several lines was
+    // left untouched, so its path never got a .ts extension and Deno refused to
+    // resolve it - `Module not found ".../datatypes/t-range"`. Non-greedy, so the
+    // match still stops at the first `from '...'` rather than running on into the
+    // next statement.
+    const newContent = content.replace(/^(import|export)\s+([\s\S]+?)\s+from\s+['"]([^'"]+)['"];?$/mg, (_, op, what, where) => {
             if (/^\./.test(where)) {
                 if (localBindings[where]) {
                     where = localBindings[where];

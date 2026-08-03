@@ -4,7 +4,7 @@ import hash from 'https://deno.land/x/object_hash@2.0.3.1/mod.ts';
 import { Types, ArrayType, isNumeric, reconciliateTypes } from './datatypes/index.ts';
 import { buildCall } from './parser/function-call.ts';
 import { nullIsh, executionCtx } from './utils.ts';
-import { QName } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { QName } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 export interface EvaluatorOptions {
     isAny?: boolean;

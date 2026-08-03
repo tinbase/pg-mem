@@ -1,6 +1,6 @@
 import { Schema, IMemoryDb, ISchema, TableEvent, GlobalEvent, QueryError, IBackup, MemoryDbOptions, ISubscription, LanguageCompiler, nil } from './interfaces.ts';
 import { _IDb, _ISelection, _ITable, _Transaction, _ISchema, _FunctionDefinition, GLOBAL_VARS, _IType, _OperatorDefinition, IValue, PreparedStatementRunner } from './interfaces-private.ts';
-import { Statement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Statement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { DbSnapshot } from './interfaces.ts';
 import { serializeDb, deserializeDb, isSchemaStatement } from './persistence.ts';
 import { DbSchema } from './schema/schema.ts';
@@ -17,7 +17,7 @@ import { buildDistinct } from './transforms/distinct.ts';
 import { buildOrderBy } from './transforms/order-by.ts';
 import { setupPgCatalog } from './schema/pg-catalog/index.ts';
 import { setupInformationSchema } from './schema/information-schema/index.ts';
-import { QName, BinaryOperator } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { QName, BinaryOperator } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { asSingleQName } from './utils.ts';
 
 export function newDb(opts?: MemoryDbOptions): IMemoryDb {

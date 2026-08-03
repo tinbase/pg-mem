@@ -1,4 +1,4 @@
-import { Expr, PolicyCommand } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Expr, PolicyCommand } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 // Row-level security state stored per table. Policy predicates are kept as parsed AST
 // (compiled lazily against the table selection during enforcement, see slice C).

@@ -1,9 +1,10 @@
 import { _ISelection, QueryError, AggregationComputer, IValue, _IType, _Transaction, AggregationGroupComputer } from '../../interfaces-private.ts';
-import { ExprCall } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { ExprCall } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { withSelection } from '../../parser/context.ts';
 import { buildValue } from '../../parser/expression-builder.ts';
 import { nullIsh } from '../../utils.ts';
 import { Types } from '../../datatypes/index.ts';
+import { toJsonValue } from '../../datatypes/json-numbers.ts';
 
 
 class JsonAggExpr implements AggregationComputer<any[]> {
@@ -17,7 +18,10 @@ class JsonAggExpr implements AggregationComputer<any[]> {
             feedItem: (item) => {
                 const value = this.exp.get(item, t);
                 if (!nullIsh(value)) {
-                    full.push(value);
+                    // Same conversion row_to_json does: the aggregated body must
+                    // carry json numbers for numeric/bigint, not the strings
+                    // pg-mem holds them as internally.
+                    full.push(toJsonValue(value, this.exp.type));
                 }
             },
             finish: () => full.length === 0 ? null : full,

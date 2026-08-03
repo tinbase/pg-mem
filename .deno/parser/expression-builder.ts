@@ -5,11 +5,11 @@ import { DataType, CastError, QueryError, NotSupported, nil, ColumnNotFound } fr
 import hash from 'https://deno.land/x/object_hash@2.0.3.1/mod.ts';
 import { Value, Evaluator } from '../evaluator.ts';
 import { Types, isNumeric, reconciliateTypes, ArrayType, RecordCol } from '../datatypes/index.ts';
-import { Expr, ExprBinary, UnaryOperator, ExprCase, ExprWhen, ExprMember, ExprArrayIndex, ExprTernary, BinaryOperator, SelectStatement, ExprValueKeyword, ExprExtract, Interval, ExprOverlay, ExprSubstring, ExprPosition, ExprCall } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Expr, ExprBinary, UnaryOperator, ExprCase, ExprWhen, ExprMember, ExprArrayIndex, ExprTernary, BinaryOperator, SelectStatement, ExprValueKeyword, ExprExtract, Interval, ExprOverlay, ExprSubstring, ExprPosition, ExprCall } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import lru from 'https://deno.land/x/lru_cache@6.0.0-deno.4/mod.ts';
 import { aggregationFunctions, getAggregator } from '../transforms/aggregation.ts';
 import { getWindower } from '../transforms/window.ts';
-import moment from 'https://deno.land/x/momentjs@2.29.1-deno/mod.ts';
+import { utc } from '../datatypes/date-utils.ts';
 import { IS_PARTIAL_INDEXING } from '../execution/clean-results.ts';
 import { buildCtx, resolveOuterColumn, withCorrelation, currentCorrelation } from './context.ts';
 import { buildSelect } from '../execution/select.ts';
@@ -115,6 +115,12 @@ function _buildValueReal(val: Expr): IValue {
             // an integer literal that overflows a safe JS number is a bigint (as in pg),
             // carried through valueText with full precision
             if (val.valueText) {
+                // `value` is the lossy JS number the parser also provides; mark it
+                // read so the AST-completeness check doesn't reject the statement
+                // for an unconsumed node. Without this, `select 9007199254740992`
+                // worked (no check on that path) while inserting the same literal
+                // failed as "parts have not been read by the query planner".
+                ignore(val.value);
                 return new Evaluator(Types.bigint, null, val.valueText, null, val.valueText);
             }
             return Value.number(val.value, Types.integer);
@@ -974,14 +980,14 @@ function buildExtract(op: ExprExtract): IValue {
     }
     switch (op.field.name) {
         case 'millennium':
-            return extract(Types.date, x => Math.ceil(moment.utc(x).year() / 1000));
+            return extract(Types.date, x => Math.ceil(utc(x).year() / 1000));
         case 'century':
-            return extract(Types.date, x => Math.ceil(moment.utc(x).year() / 100));
+            return extract(Types.date, x => Math.ceil(utc(x).year() / 100));
         case 'decade':
-            return extract(Types.date, x => Math.floor(moment.utc(x).year() / 10));
+            return extract(Types.date, x => Math.floor(utc(x).year() / 10));
         case 'day':
             if (from.canCast(Types.date)) {
-                return extract(Types.date, x => moment.utc(x).date());
+                return extract(Types.date, x => utc(x).date());
             }
             return extract(Types.interval, (x: Interval) => x.days ?? 0);
         case 'second':
@@ -1007,42 +1013,42 @@ function buildExtract(op: ExprExtract): IValue {
             return extract(Types.interval, (x: Interval) => (x.seconds ?? 0) * 1000 + (x.milliseconds ?? 0), Types.float);
         case 'month':
             if (from.canCast(Types.date)) {
-                return extract(Types.date, x => moment.utc(x).month() + 1);
+                return extract(Types.date, x => utc(x).month() + 1);
             }
             return extract(Types.interval, (x: Interval) => x.months ?? 0);
         case 'year':
             if (from.canCast(Types.date)) {
-                return extract(Types.date, x => moment.utc(x).year());
+                return extract(Types.date, x => utc(x).year());
             }
             return extract(Types.interval, (x: Interval) => x.years ?? 0);
         case 'dow':
-            return extract(Types.date, x => moment.utc(x).day());
+            return extract(Types.date, x => utc(x).day());
         case 'isodow':
             return extract(Types.date, x => {
-                const dow = moment.utc(x).day();
+                const dow = utc(x).day();
                 return dow ? dow : 7;
             });
         case 'doy':
-            return extract(Types.date, x => moment.utc(x).dayOfYear());
+            return extract(Types.date, x => utc(x).dayOfYear());
         case 'epoch':
             if (from.canCast(Types.timestamp())) {
-                return extract(Types.timestamp(), x => moment.utc(x).unix(), Types.float);
+                return extract(Types.timestamp(), x => utc(x).unix(), Types.float);
             }
             return extract(Types.interval, (x: Interval) => intervalToSec(x));
         case 'hour':
             if (from.canCast(Types.timestamp())) {
-                return extract(Types.timestamp(), x => moment.utc(x).hour());
+                return extract(Types.timestamp(), x => utc(x).hour());
             }
             return extract(Types.interval, (x: Interval) => x.hours ?? 0);
         case 'isoyear':
             return extract(Types.date, x => {
-                const d = moment.utc(x);
+                const d = utc(x);
                 return d.dayOfYear() <= 1 ? d.year() - 1 : d.year();
             });
         case 'quarter':
-            return extract(Types.date, x => moment.utc(x).quarter());
+            return extract(Types.date, x => utc(x).quarter());
         case 'week':
-            return extract(Types.date, x => moment.utc(x).week());
+            return extract(Types.date, x => utc(x).week());
         case 'microseconds':
             if (from.canCast(Types.time)) {
                 return extract(Types.time, x => {

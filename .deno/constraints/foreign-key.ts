@@ -1,15 +1,31 @@
 import { ISubscription, NotSupported, QueryError } from '../interfaces.ts';
-import { Expr, ExprBinary, TableConstraintForeignKey } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Expr, ExprBinary, TableConstraintForeignKey } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { asTable, CreateIndexColDef, _IConstraint, _ITable, _Transaction } from '../interfaces-private.ts';
 import { nullIsh } from '../utils.ts';
 import { deferCheck } from '../execution/deferred-checks.ts';
 
 export class ForeignKey implements _IConstraint {
 
+    /** Marks this constraint as a foreign key for the catalogues, without an instanceof import. */
+    readonly constraintKind = 'foreign key' as const;
+
     private unsubs: ISubscription[] = [];
 
     private table!: _ITable;
     private foreignTable!: _ITable;
+
+    /**
+     * The FK's shape, kept for the catalogues.
+     *
+     * install() has all of this in hand but previously discarded it, which is why
+     * information_schema.table_constraints and referential_constraints reported no foreign keys at
+     * all — the constraint worked, it was just invisible to anything introspecting the schema.
+     */
+    localColumns: string[] = [];
+    foreignColumns: string[] = [];
+    onDelete: string = 'NO ACTION';
+    onUpdate: string = 'NO ACTION';
+    matchType: string = 'NONE';
 
 
 
@@ -19,6 +35,15 @@ export class ForeignKey implements _IConstraint {
 
     get schema() {
         return this.table.ownerSchema;
+    }
+
+    /** Names for the catalogues — the tables themselves are private. */
+    get tableName() {
+        return this.table.name;
+    }
+
+    get foreignTableName() {
+        return this.foreignTable.name;
     }
 
 
@@ -31,6 +56,12 @@ export class ForeignKey implements _IConstraint {
         const fcols = cst.foreignColumns.map(x => ftable.getColumnRef(x.name));
         this.table = table;
         this.foreignTable = ftable;
+        this.localColumns = cst.localColumns.map(x => x.name);
+        this.foreignColumns = cst.foreignColumns.map(x => x.name);
+        // Postgres spells these out in referential_constraints; 'no action' is the default.
+        this.onDelete = (cst.onDelete ?? 'no action').toUpperCase();
+        this.onUpdate = (cst.onUpdate ?? 'no action').toUpperCase();
+        this.matchType = (cst.match ?? 'simple').toUpperCase() === 'SIMPLE' ? 'NONE' : (cst.match ?? 'simple').toUpperCase();
         if (cols.length !== fcols.length) {
             throw new QueryError('Foreign key count mismatch');
         }
