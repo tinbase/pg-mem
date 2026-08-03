@@ -1,6 +1,13 @@
 {
   // === THIS IS THE DEFAULT DENO CONFIGURATION : https://deno.land/manual/getting_started/typescript
     "compilerOptions": {
+      // Also set in tsconfig.json, but it has to be here: bun (1.3.x) reads this
+      // option only from the base of an `extends` chain and ignores the child's
+      // value, so with it declared solely downstream, bun applied modern TC39
+      // decorator semantics to legacy decorators. mikro-orm's @PrimaryKey then
+      // received `undefined` as its target and the samples blew up under CI's
+      // bun while passing on 1.2.x. Harmless duplication for tsc.
+      "experimentalDecorators": true,
       "allowJs": false,
       "allowUmdGlobalAccess": false,
       "allowUnreachableCode": false,
