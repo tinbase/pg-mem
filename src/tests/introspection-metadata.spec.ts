@@ -225,4 +225,58 @@ describe('introspection metadata', () => {
         });
     });
 
+
+    // numeric/bigint are held as strings so arithmetic stays exact and so a
+    // node-postgres client sees what it would from real Postgres. The json
+    // builders were emitting that internal representation though: to_json of a
+    // numeric gave the string "98.4" where Postgres gives the number 98.4, so
+    // `row.score.toFixed(1)` worked against Postgres and threw here.
+    describe('json builders emit numbers for numeric/bigint', () => {
+
+        beforeEach(() => {
+            none(`create table t (id int primary key, score numeric, big bigint, label text)`);
+            none(`insert into t values (1, 98.4, 42, '12.5')`);
+        });
+
+        it('to_json converts numeric and bigint, leaving text alone', () => {
+            const r = many(`select to_json(score) as s, to_json(big) as b, to_json(label) as l from t`)[0];
+            expect(r.s).toBe(98.4);
+            expect(r.b).toBe(42);
+            expect(r.l).toBe('12.5');
+        });
+
+        it('row_to_json converts them per column', () => {
+            const j = many(`select row_to_json(t) as j from t`)[0].j;
+            expect(j).toEqual({ id: 1, score: 98.4, big: 42, label: '12.5' });
+        });
+
+        it('json_agg converts them inside the aggregated body', () => {
+            const j = many(`select json_agg(t) as j from t`)[0].j;
+            expect(j).toEqual([{ id: 1, score: 98.4, big: 42, label: '12.5' }]);
+        });
+
+        // The string form is correct outside json: node-postgres returns numeric
+        // and int8 as strings against real Postgres too, to preserve precision.
+        it('leaves plain selects as strings', () => {
+            const r = many(`select score, big from t`)[0];
+            expect(r.score).toBe('98.4');
+            expect(r.big).toBe('42');
+        });
+
+        it('keeps nulls null rather than coercing them to 0', () => {
+            none(`insert into t values (2, null, null, null)`);
+            const j = many(`select row_to_json(t) as j from t where id = 2`)[0].j;
+            expect(j.score).toBe(null);
+            expect(j.big).toBe(null);
+        });
+
+        it('converts numeric through nested json builders', () => {
+            none(`insert into t values (2, null, null, null)`);
+            none(`insert into t values (3, 1.25, 7, 'x')`);
+            const rows = many(`select json_agg(row_to_json(t)) as j from t`)[0].j;
+            expect(rows.map((r: any) => r.score)).toEqual([98.4, null, 1.25]);
+            expect(rows.map((r: any) => r.big)).toEqual([42, null, 7]);
+        });
+    });
+
 });

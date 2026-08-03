@@ -4,6 +4,7 @@ import { withSelection } from '../../parser/context';
 import { buildValue } from '../../parser/expression-builder';
 import { nullIsh } from '../../utils';
 import { Types } from '../../datatypes';
+import { toJsonValue } from '../../datatypes/json-numbers';
 
 
 class JsonAggExpr implements AggregationComputer<any[]> {
@@ -17,7 +18,10 @@ class JsonAggExpr implements AggregationComputer<any[]> {
             feedItem: (item) => {
                 const value = this.exp.get(item, t);
                 if (!nullIsh(value)) {
-                    full.push(value);
+                    // Same conversion row_to_json does: the aggregated body must
+                    // carry json numbers for numeric/bigint, not the strings
+                    // pg-mem holds them as internally.
+                    full.push(toJsonValue(value, this.exp.type));
                 }
             },
             finish: () => full.length === 0 ? null : full,
