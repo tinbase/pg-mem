@@ -2,7 +2,7 @@
 
 Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
-Released from the `tinbase-npm` branch, which carries the scoped package name; `master` tracks upstream.
+Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
 ## 3.3.0
 
