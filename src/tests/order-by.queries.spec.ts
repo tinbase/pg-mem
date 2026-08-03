@@ -208,4 +208,58 @@ describe('Order by', () => {
         // order on alias is just a trick... you cannot use them in actual computations.
         expectQueryError(() => many(`SELECT field aliased FROM test ORDER BY  -aliased`), /column "aliased" does not exist/);
     });
+
+    // ORDER BY <ordinal> was built as a constant, which is the same value for
+    // every row, so the clause silently did nothing and rows came back in
+    // insertion order - often indistinguishable from sorted, in a small fixture.
+    describe('positional (ORDER BY <ordinal>)', () => {
+
+        beforeEach(() => {
+            none(`create table t (a text, b int);
+                  insert into t values ('c',3),('a',1),('b',2);`);
+        });
+
+        it('orders by the nth select-list item', () => {
+            expect(many(`select a from t order by 1`).map(r => r.a)).toEqual(['a', 'b', 'c']);
+            expect(many(`select a, b from t order by 2`).map(r => r.b)).toEqual([1, 2, 3]);
+        });
+
+        it('honours asc/desc on an ordinal', () => {
+            expect(many(`select a from t order by 1 desc`).map(r => r.a)).toEqual(['c', 'b', 'a']);
+        });
+
+        it('resolves against the expanded columns for select *', () => {
+            expect(many(`select * from t order by 1`).map(r => r.a)).toEqual(['a', 'b', 'c']);
+            expect(many(`select * from t order by 2`).map(r => r.b)).toEqual([1, 2, 3]);
+        });
+
+        // Only a bare integer literal is an ordinal. `1 + 0` is an ordinary
+        // constant expression, which sorts nothing in postgres either - so this
+        // pins that the fix did not start treating every integer-valued
+        // expression as a position.
+        it('leaves a constant expression alone', () => {
+            expect(many(`select a from t order by 1 + 0`).map(r => r.a)).toEqual(['c', 'a', 'b']);
+        });
+
+        it('rejects a position outside the select list', () => {
+            expectQueryError(() => many(`select a from t order by 5`), /ORDER BY position 5 is not in select list/);
+            expectQueryError(() => many(`select a from t order by 0`), /ORDER BY position 0 is not in select list/);
+        });
+
+        it('composes with an ordinary column term', () => {
+            none(`insert into t values ('a', 0)`);
+            expect(many(`select a, b from t order by 1, b desc`).map(r => [r.a, r.b]))
+                .toEqual([['a', 1], ['a', 0], ['b', 2], ['c', 3]]);
+        });
+
+        it('works for GROUP BY too', () => {
+            none(`insert into t values ('a', 9)`);
+            expect(many(`select a from t group by 1 order by 1`).map(r => r.a)).toEqual(['a', 'b', 'c']);
+        });
+
+        it('rejects a GROUP BY position outside the select list', () => {
+            expectQueryError(() => many(`select a from t group by 3`), /GROUP BY position 3 is not in select list/);
+        });
+    });
+
 });

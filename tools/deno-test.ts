@@ -103,6 +103,24 @@ function check(what: string, actual: unknown, expected: unknown): void {
     check('bigint literal past 2^53', db.public.many(`select v from big`)[0].v, '9007199254740993');
 }
 
+// ── positional ORDER BY / GROUP BY (3.5.0) ───────────────────────────────────
+{
+    const db = newDb();
+    db.public.none(`create table t (a text, b int)`);
+    db.public.none(`insert into t values ('c',3),('a',1),('b',2)`);
+    check(
+        'order by ordinal',
+        db.public.many(`select a from t order by 1`).map((r: any) => r.a),
+        ['a', 'b', 'c'],
+    );
+    // a bare integer is a position; an expression is still just a constant
+    check(
+        'order by constant expression sorts nothing',
+        db.public.many(`select a from t order by 1 + 0`).map((r: any) => r.a),
+        ['c', 'a', 'b'],
+    );
+}
+
 if (failures > 0) {
     console.error(`\n${failures} check(s) failed in the Deno port`);
     Deno.exit(1);
