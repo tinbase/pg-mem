@@ -1,7 +1,7 @@
 import { TransformBase } from './transform-base.ts';
 import { columnEvaluator } from './selection.ts';
 import { IValue, _ISelection, _Transaction, _IIndex, _Explainer, _SelectExplanation, Stats, Row, setId, getId } from '../interfaces-private.ts';
-import { ExprRef, nil } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { ExprRef, nil } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ArrayType } from '../datatypes/index.ts';
 
 // A set-returning function call in FROM whose arguments reference preceding FROM items

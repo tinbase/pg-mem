@@ -1,5 +1,5 @@
 import { _ISchema, _Transaction, _IStatementExecutor, _IStatement, IValue, _IType, StatementResult, Parameter } from '../../interfaces-private.ts';
-import { CreateDomainStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreateDomainStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ExecHelper } from '../exec-utils.ts';
 import { buildValue } from '../../parser/expression-builder.ts';
 import { withParameters } from '../../parser/context.ts';

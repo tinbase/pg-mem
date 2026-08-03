@@ -1,5 +1,5 @@
 import { IMemoryDb, IMemoryTable, DataType, IType, TableEvent, GlobalEvent, ISchema, SchemaField, MemoryDbOptions, nil, Schema, QueryError, ISubscription, LanguageCompiler, ArgDefDetails, QueryResult, IBoundQuery, IPreparedQuery } from './interfaces.ts';
-import { Expr, SelectedColumn, CreateColumnDef, AlterColumn, LimitStatement, OrderByStatement, TableConstraint, AlterSequenceChange, CreateSequenceOptions, QName, DataTypeDef, ExprRef, Name, BinaryOperator, ValuesStatement, CreateExtensionStatement, DropFunctionStatement, ExprCall, Statement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Expr, SelectedColumn, CreateColumnDef, AlterColumn, LimitStatement, OrderByStatement, TableConstraint, AlterSequenceChange, CreateSequenceOptions, QName, DataTypeDef, ExprRef, Name, BinaryOperator, ValuesStatement, CreateExtensionStatement, DropFunctionStatement, ExprCall, Statement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { Map as ImMap, Record, Set as ImSet } from 'https://deno.land/x/immutable@4.0.0-rc.12-deno.1/mod.ts';
 import type { TableRls, Policy } from './execution/rls.ts';
 export type { TableRls, Policy } from './execution/rls.ts';

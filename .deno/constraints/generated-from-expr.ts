@@ -1,5 +1,5 @@
 import { ISubscription, NotSupported, QueryError } from '../interfaces.ts';
-import { AlterColumnAddGenerated, Expr, nil } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { AlterColumnAddGenerated, Expr, nil } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { _Column, _IConstraint, _ITable, _Transaction } from '../interfaces-private.ts';
 import { deepEqual, nullIsh } from '../utils.ts';
 import { buildValue } from '../parser/expression-builder.ts';

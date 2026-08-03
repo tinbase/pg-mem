@@ -1,5 +1,5 @@
 import { _Transaction, _ISchema, NotSupported, CreateIndexColDef, _ITable, CreateIndexDef, _IStatement, _IStatementExecutor, QueryError } from '../../interfaces-private.ts';
-import { CommentStatement, CreateEnumType } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CommentStatement, CreateEnumType } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ExecHelper } from '../exec-utils.ts';
 import { ignore, qnameToStr } from '../../utils.ts';
 import { MemoryTable } from '../../table.ts';

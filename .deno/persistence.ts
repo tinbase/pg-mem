@@ -1,4 +1,4 @@
-import { Statement, toSql } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Statement, toSql } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { _IDb, _ITable } from './interfaces-private.ts';
 import { DbSnapshot } from './interfaces.ts';
 import { isBuf } from './misc/buffer-deno.ts';

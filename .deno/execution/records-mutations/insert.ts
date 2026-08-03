@@ -1,7 +1,7 @@
 import { _ITable, _Transaction, IValue, _Explainer, nil, _ISchema, asTable, _ISelection, _IIndex, QueryError, OnConflictHandler, ChangeOpts, _IStatement, NotSupported } from '../../interfaces-private.ts';
 import { checkWriteRls } from '../rls-enforce.ts';
 import { fireRowTriggers, fireStatementTriggers, SKIP_ROW } from '../triggers.ts';
-import { InsertStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { InsertStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { buildValue } from '../../parser/expression-builder.ts';
 import { Types } from '../../datatypes/index.ts';
 import { JoinSelection } from '../../transforms/join.ts';

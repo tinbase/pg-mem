@@ -7,7 +7,7 @@ import { BIndex } from './schema/btree-index.ts';
 import { columnEvaluator } from './transforms/selection.ts';
 import { nullIsh, deepCloneSimple, Optional, indexHash, findTemplate, colByName } from './utils.ts';
 import { Map as ImMap } from 'https://deno.land/x/immutable@4.0.0-rc.12-deno.1/mod.ts';
-import { CreateColumnDef, TableConstraintForeignKey, TableConstraint, Expr, Name, ExprRef } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreateColumnDef, TableConstraintForeignKey, TableConstraint, Expr, Name, ExprRef } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ColRef } from './column.ts';
 import { buildAlias, Alias } from './transforms/alias.ts';
 import { DataSourceBase } from './transforms/transform-base.ts';
@@ -134,6 +134,17 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
     private dataId = Symbol();
     private serialsId: symbol = Symbol();
     private constraintsByName = new Map<string, _IConstraint>();
+
+    /**
+     * The constraints declared on this table.
+     *
+     * Exposed for the catalogues (information_schema.table_constraints,
+     * referential_constraints, …). Read-only on purpose: mutating the map from outside would
+     * bypass the drop handlers that keep dependent objects consistent.
+     */
+    listConstraints(): Iterable<_IConstraint> {
+        return this.constraintsByName.values();
+    }
     private indexByHashAndName = new Map<string, Map<string, {
         index: BIndex;
         expressions: IValue[];

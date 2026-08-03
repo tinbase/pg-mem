@@ -1,5 +1,5 @@
 import { _IStatementExecutor, _Transaction, StatementResult, _IStatement, _ISelection, IValue, NotSupported, QueryError, asSelectable, asTable, nil, OnStatementExecuted, _ISchema, setId } from '../interfaces-private.ts';
-import { WithStatementBinding, SelectStatement, SelectFromUnion, WithStatement, WithRecursiveStatement, ValuesStatement, SelectFromStatement, QNameMapped, Name, SelectedColumn, Expr, OrderByStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { WithStatementBinding, SelectStatement, SelectFromUnion, WithStatement, WithRecursiveStatement, ValuesStatement, SelectFromStatement, QNameMapped, Name, SelectedColumn, Expr, OrderByStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { Deletion } from './records-mutations/deletion.ts';
 import { Update } from './records-mutations/update.ts';
 import { Insert } from './records-mutations/insert.ts';

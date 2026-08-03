@@ -1,4 +1,4 @@
-import { astVisitor, Statement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { astVisitor, Statement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { _IDb, _IPreparedQuery, _ISchema, _IStatementExecutor, _Transaction, FieldInfo, _IBoundQuery, IPreparedQuery, nil, NotSupported, Parameter, ParameterInfo, QueryDescription, QueryError, QueryResult, StatementResult, _QueryResult } from '../interfaces-private.ts';
 import { StatementExec } from '../execution/statement-exec.ts';
 import { runDeferredChecks } from '../execution/deferred-checks.ts';

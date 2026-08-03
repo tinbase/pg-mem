@@ -1,5 +1,5 @@
 import { _ISchema, _Transaction, _IStatementExecutor, _IStatement, StatementResult } from '../../interfaces-private.ts';
-import { CreateCompositeType as CreateCompositeTypeStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreateCompositeType as CreateCompositeTypeStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { ExecHelper } from '../exec-utils.ts';
 import { RecordCol } from '../../datatypes/index.ts';
 import { CompositeType } from '../../datatypes/t-composite.ts';

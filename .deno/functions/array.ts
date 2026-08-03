@@ -1,7 +1,7 @@
 import { DataType, FunctionDefinition, QueryError } from '../interfaces-private.ts';
 import { Types } from '../datatypes/index.ts';
 import { nullIsh, dateAddInterval } from '../utils.ts';
-import { Interval } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Interval } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 function dateSeries(start: Date, stop: Date, step: Interval): Date[] {
     const stepped = dateAddInterval(start, step, 1);

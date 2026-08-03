@@ -2,7 +2,7 @@ import { _ITable, _ISchema, setId } from '../../interfaces-private.ts';
 import { Schema } from '../../interfaces.ts';
 import { Types } from '../../datatypes/index.ts';
 import { ReadOnlyTable } from '../readonly-table.ts';
-import { toSql } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { toSql } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 // https://www.postgresql.org/docs/current/view-pg-policies.html
 export class PgPoliciesTable extends ReadOnlyTable implements _ITable {

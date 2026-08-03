@@ -1,4 +1,4 @@
-import { TableConstraint, CreateColumnDef, NodeLocation, DataTypeDef, FunctionArgumentMode, BinaryOperator, Statement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { TableConstraint, CreateColumnDef, NodeLocation, DataTypeDef, FunctionArgumentMode, BinaryOperator, Statement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { MigrationParams } from './migrate/migrate-interfaces.ts';
 
 

@@ -1,5 +1,5 @@
 import { _IStatementExecutor, _Transaction, StatementResult, GLOBAL_VARS, QueryError } from '../interfaces-private.ts';
-import { CreateRoleStatement, SetRoleStatement, ResetStatement, DropStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreateRoleStatement, SetRoleStatement, ResetStatement, DropStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { Map as ImMap } from 'https://deno.land/x/immutable@4.0.0-rc.12-deno.1/mod.ts';
 import { ExecHelper } from './exec-utils.ts';
 import { ignore } from '../utils.ts';

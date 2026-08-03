@@ -1,4 +1,4 @@
-import { SelectFromStatement, SelectStatement, Expr, ExprRef, astMapper } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { SelectFromStatement, SelectStatement, Expr, ExprRef, astMapper } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 // GROUP BY ROLLUP(...) / CUBE(...) are expanded into a UNION ALL of one ordinary
 // GROUP BY per grouping set, with grouping columns absent from a given set projected

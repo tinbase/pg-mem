@@ -3,7 +3,7 @@ import { Types } from '../../datatypes/index.ts';
 import { registerTextSearchTypes } from '../../datatypes/t-textsearch.ts';
 import {
     normalizeConfig, toTsvector, toTsquery, plainToTsquery, tsMatch, tsRank,
-} from '../../functions/text-search';
+} from '../../functions/text-search.ts';
 
 /**
  * Registers the tsvector / tsquery types, the to_tsvector / to_tsquery /

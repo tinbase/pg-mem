@@ -1,9 +1,10 @@
 import { IValue, _IType, _ISelection, _ISchema, _IDb, _Transaction } from '../interfaces-private.ts';
 import { Types, ArrayType } from '../datatypes/index.ts';
+import { toJsonValue } from '../datatypes/json-numbers.ts';
 import { QueryError, NotSupported, nil, DataType } from '../interfaces.ts';
 import { Evaluator } from '../evaluator.ts';
 import hash from 'https://deno.land/x/object_hash@2.0.3.1/mod.ts';
-import { parseArrayLiteral, QName } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { parseArrayLiteral, QName } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { asSingleQName, nullIsh, qnameToStr } from '../utils.ts';
 import { buildCtx } from './context.ts';
 import { markSetReturning } from '../transforms/expand-srf.ts';
@@ -61,9 +62,10 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
         case 'to_jsonb':
         case 'to_json': {
             expectArgs(name, args, 1);
+            const toJsonArg = args[0].type;
             type = Types.jsonb;
             acceptNulls = true;
-            get = (v: any) => v instanceof Date ? v.toISOString() : v ?? null;
+            get = (v: any) => v instanceof Date ? v.toISOString() : toJsonValue(v ?? null, toJsonArg);
             break;
         }
         case 'json_build_object':
@@ -197,9 +199,12 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
         case 'row_to_json':
         case 'array_to_json': {
             expectArgs(name, args, [1, 2]);
+            // Carries the record's per-column types, so numeric/bigint fields are
+            // emitted as json numbers rather than pg-mem's internal strings.
+            const rowArg = args[0].type;
             type = Types.json;
             acceptNulls = true;
-            get = (v: any) => v ?? null;
+            get = (v: any) => toJsonValue(v ?? null, rowArg);
             break;
         }
         case 'array_to_string': {

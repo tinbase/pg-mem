@@ -1,5 +1,5 @@
 import { _ISchema, _Transaction, _ITable, _IView, _IStatementExecutor, asTable, StatementResult, _IStatement, QueryError } from '../../interfaces-private.ts';
-import { CreateTriggerStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { CreateTriggerStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { buildValue } from '../../parser/expression-builder.ts';
 import { ExecHelper } from '../exec-utils.ts';
 import { TriggerOp } from '../triggers.ts';

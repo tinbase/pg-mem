@@ -1,5 +1,5 @@
 import { _IDb, _ISchema, _ITable, _Transaction, IValue, _ISelection, QueryError, NotSupported, getId, setId, _IType, Parameter, nil, StatementResult, _IStatementExecutor } from '../interfaces-private.ts';
-import { Expr, parse, SelectStatement } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { Expr, parse, SelectStatement } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 import { buildValue } from '../parser/expression-builder.ts';
 import { buildSelect } from './select.ts';
 import { withSelection, withParameters } from '../parser/context.ts';

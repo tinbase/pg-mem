@@ -4,7 +4,7 @@ import { IValue, _ISelection, _Transaction, _IIndex, _Explainer, _SelectExplanat
 import { buildCtx } from '../parser/context.ts';
 import { ArrayType } from '../datatypes/index.ts';
 import { colByName, fromEntries } from '../utils.ts';
-import { nil } from 'https://deno.land/x/pgsql_ast_parser@12.0.2/mod.ts';
+import { nil } from 'npm:@tinbase/pgsql-ast-parser@^12.1.0';
 
 // Set-returning functions in a select list (select unnest(arr), generate_series(..))
 // expand the projected rows: one output row per element. Multiple SRFs advance in
