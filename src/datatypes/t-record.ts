@@ -59,10 +59,33 @@ export class RecordType extends TypeBase<any> {
     doCanCast(to: _IType): boolean | nil {
         // lets say that any type can cast to a record with no columns
         // this is a hack ... see row_to_json() UT
-        return to instanceof RecordType && !to.columns.length;
+        return to instanceof RecordType && !to.columns.length
+            || to.primary === DataType.text;
     }
 
     doCast(value: Evaluator<any>, to: _IType): Evaluator<any> | nil {
+        if (to.primary === DataType.text) {
+            // record_out: (a,b,"c d") - what `'x' || some_row` concatenates in postgres
+            const cols = this.columns;
+            return value
+                .setType(to)
+                .setConversion((row: any) => '(' + cols.map(c => recordField(row?.[c.name])).join(',') + ')'
+                    , recordToText => ({ recordToText }));
+        }
         return value;
     }
+}
+
+/** one field of record_out: empty for NULL, double-quoted when it would otherwise be ambiguous */
+function recordField(v: any): string {
+    if (v === null || v === undefined) {
+        return '';
+    }
+    const str = typeof v === 'boolean' ? (v ? 't' : 'f')
+        : v instanceof Date ? v.toISOString()
+            : typeof v === 'object' ? JSON.stringify(v)
+                : String(v);
+    return str === '' || /[",\\()\s]/.test(str)
+        ? '"' + str.replace(/(["\\])/g, '$1$1') + '"'
+        : str;
 }

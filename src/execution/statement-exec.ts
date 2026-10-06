@@ -15,7 +15,7 @@ import { CommitExecutor, RollbackExecutor, BeginStatementExec, SavepointExecutor
 import { TruncateTable } from './records-mutations/truncate-table';
 import { ShowExecutor } from './show';
 import { SetExecutor } from './set';
-import { CreateRoleExecutor, DropRoleExecutor, SetRoleExecutor, ResetExecutor } from './roles';
+import { CreateRoleExecutor, DropRoleExecutor, SetRoleExecutor, ResetExecutor, assertRolesExist } from './roles';
 import { CreatePolicy, DropPolicy } from './schema-amends/create-policy';
 import { CreateTrigger } from './schema-amends/create-trigger';
 import { CreateEnum } from './schema-amends/create-enum';
@@ -62,7 +62,7 @@ export class StatementExec implements _IStatement {
     private executor?: _IStatementExecutor;
     private checkAstCoverage?: (() => void);
 
-    constructor(readonly schema: _ISchema, private statement: Statement, private pAsSql: string | nil, private parameters?: Parameter[]) {
+    constructor(readonly schema: _ISchema, readonly statement: Statement, private pAsSql: string | nil, private parameters?: Parameter[]) {
     }
 
     onExecuted(callback: OnStatementExecuted): void {
@@ -163,14 +163,29 @@ export class StatementExec implements _IStatement {
             case 'create function':
                 return new CreateFunction(this, p);
             case 'drop function':
-                return new SimpleExecutor(p, () => this.schema.dropFunction(p), 'DROP');
+                return new SimpleExecutor(p, () => {
+                    ignore(p.cascade);
+                    this.schema.dropFunction(p);
+                }, 'DROP');
             case 'do':
                 return new DoStatementExec(this, p);
             case 'comment':
                 return new Comment(this, p);
-            case 'raise':
             case 'grant':
             case 'revoke':
+                // no privilege system: privileges are not recorded, but the grantees and (for
+                // tables) the objects must exist, as postgres checks
+                return new SimpleExecutor(p, t => {
+                    assertRolesExist(t, ((p as any).to ?? (p as any).from ?? []).map((r: any) => r?.name));
+                    const on = (p as any).on;
+                    if (on?.type === 'table') {
+                        for (const n of on.names ?? []) {
+                            this.schema.getThisOrSiblingFor(n).getObject(n);
+                        }
+                    }
+                    ignore(p);
+                });
+            case 'raise':
             case 'alter role':
             case 'alter default privileges':
                 // pg-mem has no privilege/role-config system: parse & ignore (dumps, RLS setup)
@@ -246,6 +261,22 @@ export class StatementExec implements _IStatement {
                 }, 'DROP TRIGGER');
             case 'alter index':
                 return new AlterIndex(this, p);
+            case 'drop view':
+            case 'drop materialized view':
+                // (materialized views are plain views in pg-mem)
+                return new SimpleExecutor(p, t => {
+                    ignore(p.cascade);
+                    for (const n of p.names) {
+                        const obj = this.schema.getThisOrSiblingFor(n).getObject(n, { nullIfNotFound: !!p.ifExists });
+                        if (!obj) {
+                            continue; // IF EXISTS
+                        }
+                        if (obj.type !== 'view') {
+                            throw new QueryError(`"${n.name}" is not a view`, '42809');
+                        }
+                        (obj as _IView).drop(t);
+                    }
+                }, 'DROP VIEW');
             default:
                 throw NotSupported.never(p, 'statement type');
         }

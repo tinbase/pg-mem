@@ -48,6 +48,17 @@ export class TimestampType extends TypeBase<Date> {
         return null;
     }
 
+    doPrefer(to: _IType): _IType | null {
+        // date < timestamp < timestamptz: comparing two of them promotes to the wider one,
+        // as postgres' implicit casts do (date = now() compares as timestamptz)
+        const rank = (t: DataType) => t === DataType.date ? 1 : t === DataType.timestamp ? 2 : t === DataType.timestamptz ? 3 : 0;
+        const a = rank(this.primary), b = rank(to.primary);
+        if (!a || !b) {
+            return null;
+        }
+        return a >= b ? this : to;
+    }
+
     doCanConvertImplicit(to: _IType) {
         switch (to.primary) {
             case DataType.timestamp:

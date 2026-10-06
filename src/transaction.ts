@@ -17,8 +17,22 @@ export class Transaction implements _Transaction {
         return !!this.parent;
     }
 
-    private constructor(private parent: Transaction | null, private data: ImMap<symbol, any>) {
+    aborted = false;
+
+    get inExplicitBlock(): boolean {
+        return this.explicit || !!this.parent?.inExplicitBlock;
+    }
+
+    /**
+     * When this transaction started - what now(), current_timestamp and current_date return for
+     * its whole lifetime in postgres. A transaction forked from root starts now; nested ones
+     * (BEGIN inside the implicit transaction of a call, savepoint-like children) inherit it.
+     */
+    readonly startedAt: Date;
+
+    private constructor(private parent: Transaction | null, private data: ImMap<symbol, any>, private explicit = false) {
         this.origData = data;
+        this.startedAt = parent?.isChild ? parent.startedAt : new Date();
     }
 
 
@@ -26,8 +40,8 @@ export class Transaction implements _Transaction {
         return new Transaction(null, this.data);
     }
 
-    fork(): _Transaction {
-        return new Transaction(this, this.data);
+    fork(explicit = false): _Transaction {
+        return new Transaction(this, this.data, explicit);
     }
 
     commit(): _Transaction {

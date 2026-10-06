@@ -158,16 +158,44 @@ function registerNumericOperators(schema: _ISchema) {
 }
 
 
+/** an elapsed time as postgres' interval subtraction justifies it: days, then h/m/s/ms, one sign */
+function msToInterval(ms: number) {
+    const sign = ms < 0 ? -1 : 1;
+    let rest = Math.abs(ms);
+    const days = Math.floor(rest / 86400_000); rest -= days * 86400_000;
+    const hours = Math.floor(rest / 3600_000); rest -= hours * 3600_000;
+    const minutes = Math.floor(rest / 60_000); rest -= minutes * 60_000;
+    const seconds = Math.floor(rest / 1000); rest -= seconds * 1000;
+    const out: any = {};
+    if (days) out.days = sign * days;
+    if (hours) out.hours = sign * hours;
+    if (minutes) out.minutes = sign * minutes;
+    if (seconds) out.seconds = sign * seconds;
+    if (rest) out.milliseconds = sign * rest;
+    return out;
+}
+
 function registerDatetimeOperators(schema: _ISchema) {
-    // ======= date "-" date =======
+    // ======= date "-" date = integer (days) =======
     schema.registerOperator({
         operator: '-',
         commutative: false,
         left: Types.date,
         right: Types.date,
-        returns: Types.interval,
+        returns: Types.integer,
         implementation: (a, b) => utc(a).diff(utc(b), 'days'),
     })
+    // ======= timestamp(tz) "-" timestamp(tz) = interval, as days + time (never months) =======
+    for (const tt of [Types.timestamptz(), Types.timestamp()]) {
+        schema.registerOperator({
+            operator: '-',
+            commutative: false,
+            left: tt,
+            right: tt,
+            returns: Types.interval,
+            implementation: (a: Date, b: Date) => msToInterval(a.getTime() - b.getTime()),
+        });
+    }
 
     // ======= date/time "+ -" timestamp =======
     for (const dt of dateTypes) {
@@ -218,7 +246,41 @@ function registerDatetimeOperators(schema: _ISchema) {
 
 
 
+/** jsonb key existence: a top-level object key, a string element of a top-level array, or the string scalar itself */
+function jsonbHasKey(doc: any, key: string): boolean {
+    if (Array.isArray(doc)) {
+        return doc.some(x => x === key);
+    }
+    if (doc && typeof doc === 'object') {
+        return Object.prototype.hasOwnProperty.call(doc, key);
+    }
+    return doc === key;
+}
+
 function registerJsonOperators(schema: _ISchema) {
+    // ======= "jsonb ? text" / "?|" (any) / "?&" (all) key existence
+    schema.registerOperator({
+        operator: '?',
+        left: Types.jsonb,
+        right: Types.text(),
+        returns: Types.bool,
+        implementation: (a, b: string) => jsonbHasKey(a, b),
+    });
+    schema.registerOperator({
+        operator: '?|',
+        left: Types.jsonb,
+        right: Types.text().asArray(),
+        returns: Types.bool,
+        implementation: (a, b: string[]) => b.some(k => k !== null && jsonbHasKey(a, k)),
+    });
+    schema.registerOperator({
+        operator: '?&',
+        left: Types.jsonb,
+        right: Types.text().asArray(),
+        returns: Types.bool,
+        implementation: (a, b: string[]) => b.every(k => k !== null && jsonbHasKey(a, k)),
+    });
+
     // ======= "json @> json" query operator
     schema.registerOperator({
         operator: '@>',

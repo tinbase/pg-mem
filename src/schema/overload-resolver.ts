@@ -1,5 +1,5 @@
 import { _IType, _ArgDefDetails, nil, DataType, IValue } from '../interfaces-private';
-import { Types } from '../datatypes';
+import { Types, crossesTypeCategory } from '../datatypes';
 import { it } from '../utils';
 import { QueryError } from '../interfaces';
 
@@ -141,7 +141,8 @@ class OverloadNode<T extends HasSig> {
         }
 
         // handle variadic args
-        if (this.leaf && this.leaf.argsVariadic && this.compatible(arg, this.leaf.argsVariadic)) {
+        // (the variadic builtins - concat, concat_ws, format - take VARIADIC "any" in postgres)
+        if (this.leaf && this.leaf.argsVariadic && this.compatible(arg, this.leaf.argsVariadic, true)) {
             return this.leaf;
         }
 
@@ -149,12 +150,18 @@ class OverloadNode<T extends HasSig> {
         return null;
     }
 
-    private compatible(givenArg: IValue, expectedArg: _IType) {
+    private compatible(givenArg: IValue, expectedArg: _IType, anyCategory = false) {
         if (givenArg.type === expectedArg) {
             return true;
         }
-        return givenArg.isConstantLiteral
-            ? givenArg.type.canCast(expectedArg)
-            : givenArg.type.canConvertImplicit(expectedArg) ?? givenArg.type.canCast(expectedArg);
+        if (givenArg.isConstantLiteral) {
+            return givenArg.type.canCast(expectedArg);
+        }
+        // a typed argument never crosses a type category implicitly: lower(uuid_col) is
+        // "function lower(uuid) does not exist" in postgres
+        if (!anyCategory && crossesTypeCategory(givenArg.type, expectedArg)) {
+            return false;
+        }
+        return givenArg.type.canConvertImplicit(expectedArg) ?? givenArg.type.canCast(expectedArg);
     }
 }

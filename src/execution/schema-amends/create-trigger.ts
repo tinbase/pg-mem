@@ -3,7 +3,7 @@ import { CreateTriggerStatement } from 'pgsql-ast-parser';
 import { buildValue } from '../../parser/expression-builder';
 import { ExecHelper } from '../exec-utils';
 import { TriggerOp } from '../triggers';
-import { compileTriggerWhen, TriggerContext } from '../plpgsql';
+import { compileTriggerWhen, getTriggerRunner, TriggerContext } from '../plpgsql';
 
 export class CreateTrigger extends ExecHelper implements _IStatementExecutor {
     private target: _ITable | _IView;
@@ -30,6 +30,15 @@ export class CreateTrigger extends ExecHelper implements _IStatementExecutor {
             }
         }
         this.functionSchema = schema.getThisOrSiblingFor(p.execute.function);
+        // the function is resolved at CREATE TRIGGER, not at the first firing
+        const fnName = p.execute.function.name;
+        const fn = this.functionSchema.getFunction(fnName, []);
+        if (!fn) {
+            throw new QueryError(`function ${p.execute.function.schema ? p.execute.function.schema + '.' : ''}${fnName}() does not exist`, '42883');
+        }
+        if (!getTriggerRunner(fn.implementation)) {
+            throw new QueryError(`function ${fnName} must return type trigger`, '42P17');
+        }
         this.events = p.events
             .filter(e => e.event !== 'truncate')
             .map(e => e.event as TriggerOp);

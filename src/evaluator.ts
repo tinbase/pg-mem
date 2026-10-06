@@ -411,8 +411,16 @@ export const Value = {
                 if (!Array.isArray(rawArray)) {
                     return false;
                 }
-                const has = rawArray.some(x => of.equals(rawValue, x));
-                return inclusive ? has : !has;
+                // three-valued logic: NULL IN (…) is NULL, and so is a miss when the list holds a
+                // NULL - which is why CHECK (col IN ('a','b')) accepts a NULL col in postgres
+                if (nullIsh(rawValue)) {
+                    return rawArray.length ? null : !inclusive;
+                }
+                const has = rawArray.some(x => !nullIsh(x) && of.equals(rawValue, x));
+                if (has) {
+                    return inclusive;
+                }
+                return rawArray.some(x => nullIsh(x)) ? null : !inclusive;
             });
     },
     isNull(leftValue: IValue, expectNull: boolean): IValue {

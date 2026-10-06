@@ -101,6 +101,26 @@ export function isInteger(t: DataType | IType) {
     return integers.has(type);
 }
 
+const INT4_MIN = -2147483648;
+const INT4_MAX = 2147483647;
+const INT8_MIN = BigInt('-9223372036854775808');
+const INT8_MAX = BigInt('9223372036854775807');
+
+/** Postgres stores integer as int4: a value outside it is an error, not a silently wider number. */
+export function checkInt4(n: number): number {
+    if (n < INT4_MIN || n > INT4_MAX) {
+        throw new QueryError('integer out of range', '22003');
+    }
+    return n;
+}
+
+export function checkInt8(n: bigint): bigint {
+    if (n < INT8_MIN || n > INT8_MAX) {
+        throw new QueryError('bigint out of range', '22003');
+    }
+    return n;
+}
+
 class NumberType extends TypeBase<number> {
 
     constructor(readonly primary: DataType, typeId: number) {
@@ -122,12 +142,16 @@ class NumberType extends TypeBase<number> {
     }
 
     doPrefer(type: _IType): _IType | null {
+        // the wider of the two, as postgres' implicit numeric promotion does:
+        // int4 < int8 < numeric < float8 (so int = bigint compares as bigint, whichever side it is on)
         switch (type.primary) {
             case DataType.integer:
-            case DataType.bigint:
                 return this;
-            case DataType.float:
+            case DataType.bigint:
+                return this.primary === DataType.integer ? type : this;
             case DataType.decimal:
+                return this.primary === DataType.float ? this : type;
+            case DataType.float:
                 return type;
         }
         return null;
@@ -157,9 +181,11 @@ class NumberType extends TypeBase<number> {
                 , value
                 , (raw, t) => {
                     const got = value.get(raw, t);
-                    return typeof got === 'number'
-                        ? Math.round(got)
-                        : got;
+                    if (typeof got !== 'number') {
+                        return got;
+                    }
+                    const r = Math.round(got);
+                    return to.primary === DataType.integer ? checkInt4(r) : r;
                 }
             );
         }
@@ -244,7 +270,7 @@ class BigIntType extends TypeBase<string> {
             case DataType.text:
                 return value.setType(to);
             case DataType.integer:
-                return value.setType(to).setConversion((s: string) => Number(BigInt(s)), toInt => ({ toInt }));
+                return value.setType(to).setConversion((s: string) => checkInt4(Number(BigInt(s))), toInt => ({ toInt }));
             case DataType.float:
                 return value.setType(to).setConversion((s: string) => Number(s), toFloat => ({ toFloat }));
             case DataType.decimal:
@@ -296,7 +322,7 @@ class DecimalType extends TypeBase<string> {
             case DataType.float:
                 return value.setType(to).setConversion((s: string) => Number(s), toFloat => ({ toFloat }));
             case DataType.integer:
-                return value.setType(to).setConversion((s: string) => Number(Decimal.fromText(s).round(0).toString()), toInt => ({ toInt }));
+                return value.setType(to).setConversion((s: string) => checkInt4(Number(Decimal.fromText(s).round(0).toString())), toInt => ({ toInt }));
             case DataType.bigint:
                 return value.setType(to).setConversion((s: string) => Decimal.fromText(s).round(0).toString(), toBig => ({ toBig }));
         }
@@ -516,17 +542,46 @@ class TextType extends TypeBase<string> {
 
         }
         if (numbers.has(to.primary)) {
-            const isInt = integers.has(to.primary);
+            // parse like postgres' input functions: the whole string (surrounding blanks aside)
+            // must be a number - parseFloat('12abc') = 12 is not - and produce the representation
+            // the target type stores (numeric and bigint are digit strings, not JS numbers)
+            const pgName = to.primary === DataType.decimal ? 'numeric' : to.primary === DataType.float ? 'double precision' : to.primary;
+            const scale = (to as any).scale as number | null | undefined;
             return value
                 .setConversion(str => {
-                    const val = Number.parseFloat(str);
-                    if (!Number.isFinite(val)) {
-                        throw new QueryError(`invalid input syntax for ${to.primary}: ${str}`);
+                    const s = String(str).trim();
+                    const bad = () => new QueryError(`invalid input syntax for type ${pgName}: "${str}"`, '22P02');
+                    switch (to.primary) {
+                        case DataType.integer:
+                            if (!/^[+-]?\d+$/.test(s)) {
+                                throw bad();
+                            }
+                            return checkInt4(Number(s));
+                        case DataType.bigint:
+                            if (!/^[+-]?\d+$/.test(s)) {
+                                throw bad();
+                            }
+                            return checkInt8(BigInt(s)).toString();
+                        case DataType.decimal: {
+                            if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s) && !/^nan$/i.test(s)) {
+                                throw bad();
+                            }
+                            const d = Decimal.fromText(s);
+                            return (scale === null || scale === undefined ? d : d.round(scale)).toString();
+                        }
+                        default: {
+                            if (/^[+-]?inf(inity)?$/i.test(s)) {
+                                return s.startsWith('-') ? -Infinity : Infinity;
+                            }
+                            if (/^nan$/i.test(s)) {
+                                return NaN;
+                            }
+                            if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) {
+                                throw bad();
+                            }
+                            return Number(s);
+                        }
                     }
-                    if (isInt && Math.floor(val) !== val) {
-                        throw new QueryError(`invalid input syntax for ${to.primary}: ${str}`)
-                    }
-                    return val;
                 }
                     , castNum => ({ castNum, to: to.primary }));
         }
@@ -906,6 +961,46 @@ export function reconciliateTypes(values: IValue[], nullIfNoMatch?: boolean, str
 
 
 
+/**
+ * Postgres type category (pg_type.typcategory) of the built-in types pg-mem models.
+ * Postgres has no implicit cast between these categories: a typed value only crosses one
+ * through an explicit cast, so `uuid_col = text_col` is "operator does not exist: uuid = text".
+ * Untyped literals and bind parameters are exempt - they are 'unknown' and coerce to anything.
+ */
+function typeCategory(t: _IType): string | null {
+    switch (t.primary) {
+        case DataType.text:
+        case DataType.citext:
+            return 'string';
+        case DataType.uuid:
+            return 'uuid';
+        case DataType.bool:
+            return 'bool';
+        case DataType.json:
+        case DataType.jsonb:
+            return 'json';
+        case DataType.integer:
+        case DataType.bigint:
+        case DataType.float:
+        case DataType.decimal:
+            return 'numeric';
+        case DataType.date:
+        case DataType.timestamp:
+        case DataType.timestamptz:
+            return 'datetime';
+        case DataType.bytea:
+            return 'bytea';
+    }
+    return null;
+}
+
+/** True when Postgres refuses to implicitly convert a typed value of `from` into `to`. */
+export function crossesTypeCategory(from: _IType, to: _IType): boolean {
+    const a = typeCategory(from);
+    const b = typeCategory(to);
+    return !!a && !!b && a !== b;
+}
+
 /** Finds a common type by implicit conversion */
 function reconciliateTypesRaw(values: IValue[], nullIfNoMatch?: false, stricterType?: boolean): _IType;
 function reconciliateTypesRaw(values: IValue[], nullIfNoMatch: true, stricterType?: boolean): _IType | nil;
@@ -926,7 +1021,8 @@ function reconciliateTypesRaw(values: IValue[], nullIfNoMatch?: boolean, stricte
 
     // check that all constant literals are matching this.
     for (const x of values) {
-        if (!x.isConstantLiteral && !x.type.canConvertImplicit(foundType)) {
+        const unknownLiteral = x.isConstantLiteral && x.type.primary === DataType.text;
+        if (!x.isConstantLiteral && !x.type.canConvertImplicit(foundType) || !unknownLiteral && crossesTypeCategory(x.type, foundType)) {
             if (nullIfNoMatch) {
                 return null;
             }

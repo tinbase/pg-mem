@@ -155,8 +155,14 @@ export type _ArgDefDetails = ArgDefDetails & {
 
 export interface _Transaction {
     readonly isChild: boolean;
-    /** Create a new transaction within this transaction */
-    fork(): _Transaction;
+    /** true inside a BEGIN … COMMIT/ROLLBACK block (this transaction or an ancestor was opened by BEGIN) */
+    readonly inExplicitBlock: boolean;
+    /** transaction start: the value of now() / current_timestamp for its whole lifetime */
+    readonly startedAt: Date;
+    /** set when a statement failed inside an explicit block: Postgres refuses everything but COMMIT/ROLLBACK until the block ends */
+    aborted: boolean;
+    /** Create a new transaction within this transaction (explicit = opened by BEGIN) */
+    fork(explicit?: boolean): _Transaction;
     /** Commit this transaction (returns the parent transaction) */
     commit(): _Transaction;
     /** Commits this transaction and all underlying transactions */
@@ -387,6 +393,13 @@ export interface _IDb extends IMemoryDb {
     readonly options: MemoryDbOptions;
     readonly public: _ISchema;
     readonly data: _Transaction;
+    /**
+     * The transaction block a BEGIN left open at the end of a query call.
+     * Postgres keeps a transaction open across round-trips until COMMIT/ROLLBACK; pg-mem used to
+     * commit at the end of every call, so `begin` / `delete` / `rollback` sent separately (as every
+     * driver does) persisted the delete. The next call resumes this transaction instead of forking root.
+     */
+    sessionTx: _Transaction | null;
     readonly searchPath: ReadonlyArray<string>;
     /** session-scoped named prepared statements (SQL-level PREPARE / EXECUTE);
      * each entry is a runner that binds args and executes against a transaction */
@@ -446,6 +459,10 @@ export interface _ITable extends IMemoryTable<any>, _RelationBase {
     readonly rls: TableRls;
     createPolicy(policy: Policy): void;
     dropPolicy(name: string, ifExists: boolean): void;
+    /** every constraint on this table (FKs, uniques, checks, ...) */
+    listConstraints?(): Iterable<_IConstraint>;
+    /** foreign keys on any table that reference this one (only those through `viaColumns` when given) */
+    referencingForeignKeys?(viaColumns?: string[]): _IForeignKeyRef[];
     setRowLevelSecurity(action: 'enable' | 'disable' | 'force' | 'no force'): void;
     /** Triggers attached to this table */
     readonly triggers: TableTriggers;
@@ -523,6 +540,14 @@ export interface _Column {
     rename(to: string, t: _Transaction): this;
     drop(t: _Transaction): void;
     onDrop(sub: DropHandler): ISubscription;
+}
+
+/** The parts of a foreign key that dependency checks need. */
+export interface _IForeignKeyRef {
+    readonly name: string;
+    readonly tableName: string;
+    readonly foreignColumns: string[];
+    uninstall(t: _Transaction): void;
 }
 
 export interface CreateIndexDef {

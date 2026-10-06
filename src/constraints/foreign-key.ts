@@ -46,6 +46,11 @@ export class ForeignKey implements _IConstraint {
         return this.foreignTable.name;
     }
 
+    /** The referenced table, for dependency checks (DROP TABLE / DROP COLUMN refuse to orphan this FK). */
+    get referencedTable(): _ITable {
+        return this.foreignTable;
+    }
+
 
     constructor(readonly name: string) {
     }
@@ -130,7 +135,7 @@ export class ForeignKey implements _IConstraint {
                 switch (neu ? onUpdate : onDelete) {
                     case 'no action':
                     case 'restrict':
-                        throw new QueryError(`update or delete on table "${ftable.name}" violates foreign key constraint on table "${this.name}"`);
+                        throw new QueryError(`update or delete on table "${ftable.name}" violates foreign key constraint "${this.name}" on table "${table.name}"`, '23503');
                     case 'cascade':
                         if (neu) {
                             for (let i = 0; i < fcols.length; i++) {
@@ -191,7 +196,7 @@ export class ForeignKey implements _IConstraint {
                     yielded = true;
                 }
                 if (!yielded) {
-                    throw new QueryError(`insert or update on table "${ftable.name}" violates foreign key constraint on table "${this.name}"`);
+                    throw new QueryError(`insert or update on table "${table.name}" violates foreign key constraint "${this.name}"`, '23503');
                 }
             };
             if (deferred) {
@@ -243,8 +248,14 @@ export class ForeignKey implements _IConstraint {
         return this;
     }
 
+    /** set by the owning table: drops this FK from its constraint list (and so the catalogues) */
+    onUninstalled?: () => void;
+
     uninstall(t: _Transaction): void {
         this.unsubs.forEach(x => x.unsubscribe());
         this.unsubs = [];
+        // also when uninstalled from the other side (DROP TABLE <referenced> CASCADE), not only
+        // via the table's own ConstraintWrapper - or the catalogues keep listing a dead FK
+        this.onUninstalled?.();
     }
 }

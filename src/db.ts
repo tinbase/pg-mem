@@ -84,6 +84,8 @@ class MemoryDb implements _IDb {
         this.raiseGlobal('schema-change', this);
     }
 
+    sessionTx: _Transaction | null = null;
+
     constructor(public data: Transaction, schemas?: Map<string, _ISchema>, readonly options: MemoryDbOptions = {}) {
         if (!schemas) {
             this.createSchema('public');

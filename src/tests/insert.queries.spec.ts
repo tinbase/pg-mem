@@ -331,7 +331,8 @@ describe('Inserts', () => {
 
         it('should allow string for bigint columns on insert', () => {
             none(`create table test(a bigint, b int8);`);
-            expect(many(`insert into test values ('123456','111') returning a`)).toEqual([{ a: 123456 }]);
+            // bigint is a digit string whichever way it was inserted (as node-postgres returns it)
+            expect(many(`insert into test values ('123456','111') returning a`)).toEqual([{ a: '123456' }]);
         })
 
         it('checks that insert values has enough columns', () => {

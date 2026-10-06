@@ -1,4 +1,4 @@
-import { _IDb, _ISchema, _ITable, _Transaction, IValue, _ISelection, QueryError, NotSupported, getId, setId, _IType, Parameter, nil, StatementResult, _IStatementExecutor } from '../interfaces-private';
+import { _IDb, _ISchema, _ITable, _Transaction, IValue, _ISelection, QueryError, NotSupported, getId, setId, _IType, Parameter, nil, StatementResult, _IStatementExecutor, asTable } from '../interfaces-private';
 import { Expr, parse, SelectStatement } from 'pgsql-ast-parser';
 import { buildValue } from '../parser/expression-builder';
 import { buildSelect } from './select';
@@ -42,13 +42,34 @@ function stripComments(code: string): string {
     );
 }
 
-/** Tokenize a plpgsql fragment: strings, numbers, `..` range, `:=`, words, punctuation. */
+/** Tokenize a plpgsql fragment: strings, numbers, `..` range, `:=`, words, operators, punctuation. */
 function tokenize(code: string): string[] {
     // A $tag$…$tag$ (or $$…$$) dollar-quoted block is a single opaque token (matched
     // first so its content — which may contain ; ' etc. — is not split). JS regex
     // backreferences let us balance the tag, which the moo lexer can't do.
-    return stripComments(code)
-        .match(/\$([a-zA-Z_]\w*)?\$[\s\S]*?\$\1\$|'(?:[^']|'')*'|\d+\.\d+|\d+|\.\.|:=|::|>=|<=|<>|!=|\|\||[a-zA-Z_][\w$]*|[(),.;]|[^\s]/g) ?? [];
+    const raw = stripComments(code)
+        .match(/\$([a-zA-Z_]\w*)?\$[\s\S]*?\$\1\$|'(?:[^']|'')*'|\d+\.\d+|\d+|\.\.|:=|::|[+\-*/<>=~!@#%^&|`?]+|[a-zA-Z_][\w$]*|[(),.;]|[^\s]/g) ?? [];
+    return raw.flatMap(splitOperator);
+}
+
+/**
+ * Postgres' rule for where an operator token ends: a run of + - * / < > = ~ ! @ # % ^ & | ` ?
+ * is one operator (->>, #>>, @>, ?|, ~*), except that a multi-character operator cannot end
+ * in + or - unless it also contains one of ~ ! @ # % ^ & | ` ? - so `x=-1` is `=` then `-1`.
+ * Splitting `->>` into `- > >` (as listing only two-character operators did) broke every
+ * trigger that reads JSON, e.g. `new.raw_user_meta_data->>'name'`.
+ */
+function splitOperator(tok: string): string[] {
+    if (tok.length < 2 || !/^[+\-*/<>=~!@#%^&|`?]+$/.test(tok) || /[~!@#%^&|`?]/.test(tok)) {
+        return [tok];
+    }
+    let op = tok;
+    const tail: string[] = [];
+    while (op.length > 1 && /[+-]$/.test(op)) {
+        tail.unshift(op[op.length - 1]);
+        op = op.slice(0, -1);
+    }
+    return [op, ...tail];
 }
 
 /** strip surrounding single quotes and unescape '' -> ' */
@@ -609,13 +630,15 @@ function makeHelpers(schema: _ISchema, params: Parameter[], returns: _IType | ni
 
 /** compiles a regular plpgsql function into a callable implementation */
 function buildPlpgsqlFunction(code: string, args: VarDef[], returns: _IType | nil, schema: _ISchema) {
-    const { decls, block } = new GParser(code).parse();
-    const setof = usesSetof([block]);
+    // parsed now to report syntax errors at CREATE FUNCTION; re-parsed at first call with
+    // %ROWTYPE / %TYPE resolved, once the tables they name exist
+    const setof = usesSetof([new GParser(code).parse().block]);
     // compilation is deferred to first call: the function's own name (recursion) and any
     // later-defined helpers must already be registered, which they are by call time
     let program: GProgram | null = null;
 
     const compile = (): GProgram => {
+        const { decls, block } = new GParser(expandRowTypes(tokenize(code), schema)).parse();
         const locals = decls.map(d => ({
             name: d.name,
             type: schema.getType(parseTypeDef((d as any).typeSrc)) as _IType,
@@ -701,10 +724,12 @@ function mangleTrigger(toks: string[]): string[] {
  * assignments, control flow, RAISE, EXCEPTION, etc. Compiled lazily per table.
  */
 function buildPlpgsqlTrigger(code: string, schema: _ISchema): TriggerRunner {
-    const { decls, block } = new GParser(mangleTrigger(tokenize(code))).parse();
+    // syntax check at CREATE FUNCTION; compiled per table at first firing (see compileForTable)
+    new GParser(mangleTrigger(tokenize(code))).parse();
     const perTable = new Map<_ITable, { compiled: GCompiled[]; locals: any[]; cols: { id: string }[] }>();
 
     const compileForTable = (table: _ITable) => {
+        const { decls, block } = new GParser(expandRowTypes(mangleTrigger(tokenize(code)), schema)).parse();
         const cols = table.selection.columns
             .filter(c => !!c.id)
             .map(c => ({ id: c.id!, type: c.type }));
@@ -775,6 +800,68 @@ function buildPlpgsqlTrigger(code: string, schema: _ISchema): TriggerRunner {
             frameStack.pop();
         }
     };
+}
+
+/** a table named by a plpgsql declaration (`markets` / `public.markets`) */
+function declTable(schema: _ISchema, ref: string[]): _ITable {
+    const name = ref.length > 1 ? { schema: ref[0], name: ref[1] } : { name: ref[0] };
+    return asTable(schema.getThisOrSiblingFor(name).getObject(name));
+}
+
+/**
+ * Row-typed variables, by expansion into scalars (as NEW/OLD are, see mangleTrigger):
+ *   DECLARE m public.markets%ROWTYPE;  ->  one variable per column, __r_m__<col>
+ *   m.col                              ->  __r_m__col
+ *   SELECT … INTO m                    ->  SELECT … INTO __r_m__c1, __r_m__c2, …  (positional, like postgres)
+ * and DECLARE x tbl.col%TYPE takes that column's type.
+ */
+function expandRowTypes(toks: string[], schema: _ISchema): string[] {
+    const lower = toks.map(t => t.toLowerCase());
+    const di = lower.indexOf('declare');
+    const bi = lower.indexOf('begin');
+    if (di < 0 || bi < di) {
+        return toks;
+    }
+    const rowVars = new Map<string, string[]>();
+    const out: string[] = toks.slice(0, di + 1);
+    for (let i = di + 1; i < bi;) {
+        let j = i;
+        while (j < bi && toks[j] !== ';') {
+            j++;
+        }
+        const decl = toks.slice(i, j);
+        const pct = decl.indexOf('%');
+        const kind = pct > 1 ? decl[pct + 1]?.toLowerCase() : null;
+        // the name, possibly qualified, before %: [a, '.', b] -> ['a', 'b']
+        const ref = pct > 1 ? decl.slice(1, pct).filter(x => x !== '.') : [];
+        if (kind === 'rowtype') {
+            const name = decl[0].toLowerCase();
+            const cols = declTable(schema, ref).selection.columns.filter(c => !!c.id);
+            for (const c of cols) {
+                out.push(`__r_${name}__${c.id}`, c.type.name, ';');
+            }
+            rowVars.set(name, cols.map(c => `__r_${name}__${c.id}`));
+        } else if (kind === 'type' && ref.length >= 2) {
+            const col = ref[ref.length - 1];
+            const type = declTable(schema, ref.slice(0, -1)).getColumnRef(col).expression.type;
+            out.push(decl[0], type.name, ...decl.slice(pct + 2), ';');
+        } else {
+            out.push(...decl, ';');
+        }
+        i = j + 1;
+    }
+    for (let k = bi; k < toks.length; k++) {
+        const vars = rowVars.get(lower[k]);
+        if (vars && toks[k + 1] === '.' && /^[a-zA-Z_]/.test(toks[k + 2] ?? '')) {
+            out.push(`__r_${lower[k]}__${lower[k + 2]}`);
+            k += 2;
+        } else if (vars && (lower[k - 1] === 'into' && lower[k - 2] !== 'insert' || lower[k - 1] === 'strict' && lower[k - 2] === 'into')) {
+            vars.forEach((v, n) => out.push(...(n ? [','] : []), v));
+        } else {
+            out.push(toks[k]);
+        }
+    }
+    return out;
 }
 
 function parseTypeDef(typeSrc: string): any {

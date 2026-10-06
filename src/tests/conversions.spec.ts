@@ -32,7 +32,8 @@ describe('Conversions', () => {
         db.public.none(`create table test(value decimal)`);
         db.public.none(`insert into test(value) values ('42.5')`);
         const many = db.public.many(`select value from test where value is not null`);
-        expect(many).toEqual([{ value: 42.5 }]);
+        // numeric is a decimal string whichever way it was inserted (as node-postgres returns it)
+        expect(many).toEqual([{ value: '42.5' }]);
     });
 
     it('incompatible decimal with string', () => {

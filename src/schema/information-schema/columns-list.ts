@@ -1,6 +1,7 @@
 import { _ITable, _ISelection, IValue, _IIndex, _IDb, IndexKey, setId, _Transaction, _ISchema } from '../../interfaces-private';
 import { Schema, nil } from '../../interfaces';
-import { toSql } from 'pgsql-ast-parser';
+import { toSql, DataTypeDef } from 'pgsql-ast-parser';
+import { DataType } from '../../interfaces';
 import { Types } from '../../datatypes';
 import { TableIndex } from '../table-index';
 import { ReadOnlyTable } from '../readonly-table';
@@ -12,10 +13,55 @@ const IS_SCHEMA = Symbol('_is_colmun');
  * Only real tables carry ColRefs; views and function-call tables expose values without column
  * definitions, so callers must tolerate nil rather than assume a table.
  */
+const BUILTIN = new Set<string>(Object.values(DataType));
+
+/** Postgres' internal (pg_type) name for a type, as udt_name reports it. */
+function udtName(type: IValue['type'], declared: DataTypeDef | nil): string {
+    const n = (declared as any)?.name?.toLowerCase() as string | undefined;
+    switch (type.primary) {
+        case DataType.integer: return n === 'smallint' || n === 'int2' || n === 'smallserial' ? 'int2' : 'int4';
+        case DataType.bigint: return 'int8';
+        case DataType.float: return n === 'real' || n === 'float4' ? 'float4' : 'float8';
+        case DataType.decimal: return 'numeric';
+        case DataType.text:
+            if (n === 'char' || n === 'character' || n === 'bpchar') return 'bpchar';
+            return (type as any).len || n === 'varchar' || n === 'character varying' ? 'varchar' : 'text';
+        case DataType.array:
+            return '_' + udtName((type as any).of, declared?.kind === 'array' ? declared.arrayOf : null);
+    }
+    // built-ins are named by their primary (timestamptz, not 'timestamp with time zone'); enums/domains by name
+    return BUILTIN.has(type.primary) ? type.primary : (type as any).name ?? type.primary;
+}
+
+/** information_schema.columns.data_type: the SQL-standard name, 'ARRAY', or 'USER-DEFINED'. */
+function sqlTypeName(type: IValue['type'], declared: DataTypeDef | nil): string {
+    if (type.primary === DataType.array) {
+        return 'ARRAY';
+    }
+    if (type.primary === DataType.citext || !BUILTIN.has(type.primary)) {
+        return 'USER-DEFINED';
+    }
+    switch (udtName(type, declared)) {
+        case 'int2': return 'smallint';
+        case 'int4': return 'integer';
+        case 'int8': return 'bigint';
+        case 'float4': return 'real';
+        case 'float8': return 'double precision';
+        case 'bool': return 'boolean';
+        case 'bpchar': return 'character';
+        case 'varchar': return 'character varying';
+        case 'timestamptz': return 'timestamp with time zone';
+        case 'timestamp': return 'timestamp without time zone';
+        case 'timetz': return 'time with time zone';
+        case 'time': return 'time without time zone';
+    }
+    return udtName(type, declared);
+}
+
 function columnRef(
     table: _ITable,
     columnName: string | nil
-): { notNull?: boolean; default?: IValue | nil } | nil {
+): { notNull?: boolean; default?: IValue | nil; declaredType?: DataTypeDef | nil } | nil {
     if (!columnName) {
         return null;
     }
@@ -179,14 +225,15 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
             // column refs (views, function-call tables) still fall back to the permissive answer.
             is_nullable: columnRef(table, t.id)?.notNull ? 'NO' : 'YES',
             column_default: defaultExpressionOf(table, t.id),
-            data_type: t.type.primary, // <== todo
+            data_type: sqlTypeName(t.type, columnRef(table, t.id)?.declaredType),
+            character_maximum_length: (t.type as any).len ?? (udtName(t.type, columnRef(table, t.id)?.declaredType) === 'bpchar' ? 1 : null),
             numeric_precision: null, // <== todo
             numeric_precision_radix: null, // <== todo
             numeric_scale: null, // <== todo
 
             udt_catalog: 'pgmem',
             udt_schema: 'pg_catalog',
-            udt_name: t.type.primary, // <== todo
+            udt_name: udtName(t.type, columnRef(table, t.id)?.declaredType),
 
             dtd_identifier: i, // <== todo
 

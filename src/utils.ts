@@ -380,6 +380,11 @@ export function executionCtx(): ExecCtx {
     }
     return curCtx[curCtx.length - 1];
 }
+/** now() in postgres: the current transaction's start time (wall clock outside of any execution) */
+export function transactionNow(): Date {
+    return curCtx.length ? new Date(curCtx[curCtx.length - 1].transaction.startedAt.getTime()) : new Date();
+}
+
 export function hasExecutionCtx(): boolean {
     return curCtx.length > 0;
 }

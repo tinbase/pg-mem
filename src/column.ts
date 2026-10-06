@@ -1,7 +1,8 @@
 import { _Column, IValue, _IIndex, NotSupported, _Transaction, QueryError, _IType, SchemaField, ChangeHandler, nil, ISubscription, DropHandler } from './interfaces-private';
 import type { MemoryTable } from './table';
 import { Evaluator } from './evaluator';
-import { ColumnConstraint, AlterColumn, Expr, toSql } from 'pgsql-ast-parser';
+import { ColumnConstraint, AlterColumn, Expr, toSql, DataTypeDef } from 'pgsql-ast-parser';
+import { policiesDependingOn } from './execution/policy-deps';
 import { ignore, nullIsh } from './utils';
 import { columnEvaluator } from './transforms/selection';
 import { BIndex } from './schema/btree-index';
@@ -29,10 +30,18 @@ export class ColRef implements _Column {
     usedInIndexes = new Set<BIndex>();
     private drophandlers = new Set<DropHandler>();
 
+    /**
+     * The type as written in the DDL. pg-mem folds smallint into integer, real into double and
+     * char(n) into text, but information_schema reports the declared type, and a generator
+     * reading data_type should see `smallint`, not `integer`.
+     */
+    declaredType: DataTypeDef | nil;
+
     constructor(readonly table: MemoryTable
         , public expression: Evaluator
         , _schema: SchemaField
         , public name: string) {
+        this.declaredType = (_schema as any)?.declaredType ?? (_schema as any)?.dataType ?? null;
     }
 
     addConstraints(clist: ColumnConstraint[], t: _Transaction): this {
@@ -178,6 +187,10 @@ export class ColRef implements _Column {
                     break;
                 case 'set type':
                     const newType = this.table.ownerSchema.getType(alter.dataType);
+                    if (policiesDependingOn(this.table, this.expression.id!).length) {
+                        // postgres stores policies as bound expressions over the column's type
+                        throw new QueryError('cannot alter type of a column used in a policy definition', '0A000');
+                    }
                     // USING <expr> gives an explicit per-row conversion (referencing the
                     // column and any others); without it, an implicit cast is used.
                     const conv = alter.using
@@ -235,13 +248,22 @@ export class ColRef implements _Column {
     }
 
     checkConstraints(toInsert: any, t: _Transaction) {
+        const col = this.expression.get(toInsert, t);
+        if (this.isSmallint && typeof col === 'number' && (col < -32768 || col > 32767)) {
+            // smallint is stored as integer here; enforce int2's range like postgres does
+            throw new QueryError('smallint out of range', '22003');
+        }
         if (!this.notNull) {
             return;
         }
-        const col = this.expression.get(toInsert, t);
         if (nullIsh(col)) {
             throw new QueryError(`null value in column "${this.expression.id}" violates not-null constraint`);
         }
+    }
+
+    private get isSmallint() {
+        const n = (this.declaredType as any)?.name?.toLowerCase();
+        return n === 'smallint' || n === 'int2' || n === 'smallserial';
     }
 
     setDefaults(toInsert: any, t: _Transaction) {
