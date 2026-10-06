@@ -59,7 +59,10 @@ export class CreateTrigger extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction): StatementResult {
-        t = t.fullCommit();
+        if (this.p.orReplace) {
+            // CREATE OR REPLACE TRIGGER (postgres 14+)
+            this.target.dropTrigger(this.p.name.name, true);
+        }
         this.target.createTrigger({
             name: this.p.name.name,
             timing: this.p.timing,
@@ -71,7 +74,6 @@ export class CreateTrigger extends ExecHelper implements _IStatementExecutor {
             updateColumns: this.updateColumns,
             arguments: this.arguments,
         });
-        t = t.fork();
         return this.noData(t, 'CREATE TRIGGER');
     }
 }

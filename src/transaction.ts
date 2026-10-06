@@ -19,6 +19,33 @@ export class Transaction implements _Transaction {
 
     aborted = false;
 
+    /** puts the schema back as it was before this transaction's first DDL (see schema-snapshot.ts) */
+    schemaRestore?: () => void;
+
+    /**
+     * Called before a DDL statement runs in this transaction: this transaction and every enclosing
+     * one that has not seen DDL yet record the current schema, so whichever of them rolls back
+     * restores it. They all share one capture - the schema is the same for all of them right now.
+     */
+    checkpointSchema(capture: () => () => void): void {
+        let restore: (() => void) | undefined;
+        for (let x: Transaction | null = this; x && x.isChild; x = x.parent) {
+            if (!x.schemaRestore) {
+                x.schemaRestore = restore ??= capture();
+            }
+        }
+    }
+
+    /** the BEGIN block this transaction belongs to, if any */
+    get explicitBlock(): Transaction | null {
+        for (let x: Transaction | null = this; x; x = x.parent) {
+            if (x.explicit) {
+                return x;
+            }
+        }
+        return null;
+    }
+
     get inExplicitBlock(): boolean {
         return this.explicit || !!this.parent?.inExplicitBlock;
     }
@@ -49,7 +76,26 @@ export class Transaction implements _Transaction {
             return this;
         }
         if (this.parent.data !== this.origData) {
-            throw new NotSupported('Concurrent transactions');
+            // the parent moved on while we were open - e.g. CREATE SCHEMA registers its catalogue
+            // tables straight into root. Rebase our changes onto it, key by key; only the same
+            // key changed on both sides is a real conflict.
+            let merged = this.parent.data;
+            for (const [k, v] of this.data) {
+                if (this.origData.get(k) === v) {
+                    continue;
+                }
+                if (merged.get(k) !== this.origData.get(k)) {
+                    throw new NotSupported('Concurrent transactions');
+                }
+                merged = merged.set(k, v);
+            }
+            for (const k of this.origData.keys()) {
+                if (!this.data.has(k)) {
+                    merged = merged.delete(k);
+                }
+            }
+            this.parent.data = merged;
+            return this.parent;
         }
         this.parent.data = this.data;
         return this.parent;
@@ -63,20 +109,38 @@ export class Transaction implements _Transaction {
     }
 
     rollback() {
+        this.schemaRestore?.();
         return this.parent ?? this;
     }
 
-    savepoint(name: string): void {
+    /** the outermost transaction of this call or block: discarding it undoes everything */
+    discardAll(): void {
+        let outer: Transaction | null = null;
+        for (let x: Transaction | null = this; x && x.isChild; x = x.parent) {
+            if (x.schemaRestore) {
+                outer = x;
+            }
+        }
+        outer?.schemaRestore?.();
+    }
+
+    savepoint(name: string, captureSchema?: () => () => void): void {
         // re-declaring a name captures the current state under it (postgres hides the
         // older savepoint of the same name; we simply overwrite - close enough for v1)
         this.savepoints.set(name, this.data);
+        if (captureSchema) {
+            this.savepointSchemas.set(name, captureSchema());
+        }
     }
+
+    private savepointSchemas = new Map<string, () => void>();
 
     rollbackTo(name: string): void {
         const saved = this.savepoints.get(name);
         if (saved === undefined) {
             throw new QueryError(`savepoint "${name}" does not exist`);
         }
+        this.savepointSchemas.get(name)?.();
         this.data = saved;
         // the savepoint survives (can be rolled back to again), but any savepoints
         // established after it are discarded

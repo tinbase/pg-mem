@@ -20,9 +20,7 @@ export class CreateCompositeType extends ExecHelper implements _IStatementExecut
     }
 
     execute(t: _Transaction): StatementResult {
-        t = t.fullCommit();
         new CompositeType(this.onSchema, this.name, this.columns).install();
-        t = t.fork();
         return this.noData(t, 'CREATE TYPE');
     }
 }

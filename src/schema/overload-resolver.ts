@@ -31,6 +31,17 @@ export class OverloadResolver<T extends HasSig> {
         return [...ovr.all()];
     }
 
+    /** every registered overload, to put the resolver back as it is now (transactional DDL) */
+    snapshot(): () => void {
+        const all = [...this.byName.keys()].flatMap(n => this.getOverloads(n));
+        return () => {
+            this.byName = new Map();
+            for (const v of all) {
+                this.add(v, true);
+            }
+        };
+    }
+
     remove(value: T) {
         this.byName.get(value.name)?.unindex(value);
     }

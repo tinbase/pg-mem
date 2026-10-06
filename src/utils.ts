@@ -82,6 +82,12 @@ export function watchUse<T>(rootValue: T): { checked: T; check?: () => string | 
                 enumerable: true,
             });
         }
+        // non-enumerable metadata (e.g. a numeric literal's text as written) rides along unwatched
+        for (const k of Object.getOwnPropertyNames(value)) {
+            if (!Object.prototype.propertyIsEnumerable.call(value, k)) {
+                Object.defineProperty(ret, k, { value: value[k], enumerable: false });
+            }
+        }
         return ret;
     }
 

@@ -13,7 +13,6 @@ export class AlterIndex extends ExecHelper implements _IStatementExecutor {
 
     execute(t: _Transaction) {
         // commit pending data before making schema changes (no rollback support)
-        t = t.fullCommit();
 
         const idx = asIndex(this.schema.getObject(this.p.index, {
             nullIfNotFound: this.p.ifExists,
@@ -34,8 +33,6 @@ export class AlterIndex extends ExecHelper implements _IStatementExecutor {
         } else {
             ignore(this.p);
         }
-
-        t = t.fork();
         return this.noData(t, 'ALTER INDEX');
     }
 }

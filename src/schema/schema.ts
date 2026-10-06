@@ -393,10 +393,14 @@ export class DbSchema implements _ISchema, ISchema {
 
 
 
-    declareTable(table: Schema, noSchemaChange?: boolean): MemoryTable {
-        const trans = this.db.data.fork();
+    declareTable(table: Schema, noSchemaChange?: boolean, inTransaction?: _Transaction): MemoryTable {
+        // CREATE TABLE builds the table inside the statement's transaction (DDL is transactional);
+        // the JS API (db.public.declareTable) has none, so it commits on its own
+        const trans = inTransaction ?? this.db.data.fork();
         const ret = new MemoryTable(this, trans, table).register();
-        trans.commit();
+        if (!inTransaction) {
+            trans.commit();
+        }
         if (!noSchemaChange) {
             this.db.onSchemaChange();
         }

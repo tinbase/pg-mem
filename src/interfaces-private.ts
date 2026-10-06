@@ -55,7 +55,7 @@ export interface _ISchema extends ISchema {
     getTable(table: string, nullIfNotFound?: boolean): _ITable;
     tablesCount(t: _Transaction): number;
     listTables(t?: _Transaction): Iterable<_ITable>;
-    declareTable(table: Schema, noSchemaChange?: boolean): _ITable;
+    declareTable(table: Schema, noSchemaChange?: boolean, inTransaction?: _Transaction): _ITable;
     createSequence(t: _Transaction, opts: CreateSequenceOptions | nil, name: QName | nil): _ISequence;
     /** Get functions matching this overload */
     resolveFunction(name: string | QName, args: IValue[], forceOwn?: boolean): _FunctionDefinition | nil;
@@ -168,8 +168,14 @@ export interface _Transaction {
     /** Commits this transaction and all underlying transactions */
     fullCommit(): _Transaction;
     rollback(): _Transaction;
-    /** Capture the current state under a named savepoint */
-    savepoint(name: string): void;
+    /** Capture the current state under a named savepoint (and the schema, when given a capturer) */
+    savepoint(name: string, captureSchema?: () => () => void): void;
+    /** Record the schema before this transaction's first DDL, so a rollback can restore it */
+    checkpointSchema(capture: () => () => void): void;
+    /** Roll back the schema of this transaction and every enclosing one (a failed call) */
+    discardAll(): void;
+    /** The BEGIN block this transaction belongs to, if any */
+    readonly explicitBlock: _Transaction | null;
     /** Restore the state captured by a named savepoint (keeping the savepoint) */
     rollbackTo(name: string): void;
     /** Discard a named savepoint (and any established after it) */

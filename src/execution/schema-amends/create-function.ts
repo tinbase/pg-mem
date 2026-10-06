@@ -128,8 +128,10 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
                 throw new QueryError(`function ${this.toRegister.name} lready exists with same argument types`, '42723');
             }
 
-            //  ... it must be the same type
-            if (existing.returns !== returns) {
+            //  ... it must be the same type ("returns trigger" builds a fresh placeholder record
+            //  type each time, so two trigger functions compare by that, not by identity)
+            const bothTriggers = !!getTriggerRunner(existing.implementation) && isTrigger;
+            if (existing.returns !== returns && !bothTriggers && !sameReturnType(existing.returns, returns)) {
                 throw new QueryError(`cannot change return type of existing function`, '42P13');
             }
 
@@ -144,16 +146,19 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         // the creating role owns the function (what SECURITY DEFINER runs as)
         this.owner = currentRoleName(t);
         this.onSchema.registerFunction(this.toRegister, this.replace);
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
+}
+
+/** same declared return type, compared structurally (types are not always interned) */
+function sameReturnType(a: _IType | nil, b: IType | nil): boolean {
+    if (!a || !b) {
+        return a === b;
+    }
+    const x = a as any, y = b as any;
+    return x.primary === y.primary && x.name === y.name && (x.of?.name ?? null) === (y.of?.name ?? null);
 }

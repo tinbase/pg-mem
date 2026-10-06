@@ -15,16 +15,10 @@ export class CreateEnum extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         // register enum
         this.onSchema
             .registerEnum(this.name, this.values);
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

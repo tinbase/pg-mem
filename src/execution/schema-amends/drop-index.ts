@@ -22,17 +22,11 @@ export class DropIndex extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because the index sequence creation does support further rollbacks)
-        t = t.fullCommit();
 
         // alter the sequence
         for (const idx of this.idx) {
             idx.onTable.dropIndex(t, idx.name);
         }
-
-        // new implicit transaction
-        t = t.fork();
 
         return this.noData(t, 'DROP');
     }

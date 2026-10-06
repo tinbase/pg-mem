@@ -46,9 +46,6 @@ export class CreateView extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         // drop if needed
         if (this.existing && this.drop) {
@@ -57,9 +54,6 @@ export class CreateView extends ExecHelper implements _IStatementExecutor {
 
         // view creation
         this.toRegister.register();
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

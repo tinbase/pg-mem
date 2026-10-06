@@ -60,9 +60,7 @@ export class CreateDomain extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction): StatementResult {
-        t = t.fullCommit();
         new DomainType(this.onSchema, this.name, this.base, this.notNull, this.checks).install();
-        t = t.fork();
         return this.noData(t, 'CREATE DOMAIN');
     }
 }

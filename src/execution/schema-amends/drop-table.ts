@@ -23,17 +23,11 @@ export class DropTable extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because it does not support further rollbacks)
-        t = t.fullCommit();
 
         // drop table
         for (const table of this.tables) {
             table.drop(t, this.cascade);
         }
-
-        // new implicit transaction
-        t = t.fork();
 
         return this.noData(t, 'DROP');
     }

@@ -229,8 +229,10 @@ describe('Inserts', () => {
     });
 
     it('ensures serials are transactional', () => {
-        expect(many(`create table test(id serial primary key, val text);
-                        insert into test(val) values ('x');
+        // the table is created in its own call: in one multi-statement call, ROLLBACK would undo
+        // the CREATE TABLE too (DDL is transactional, as in postgres)
+        none(`create table test(id serial primary key, val text)`);
+        expect(many(`insert into test(val) values ('x');
                         insert into test(val) values ('x');
                         insert into test(val) values ('x');
                         rollback;

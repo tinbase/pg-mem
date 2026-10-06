@@ -59,10 +59,6 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
 
     execute(t: _Transaction) {
 
-        // commit pending data before making changes
-        //  (because the creation does not support further rollbacks)
-        t = t.fullCommit();
-
         const partitionOf = this.p.partitionOf;
         const partitionBy = this.p.partitionBy;
 
@@ -75,10 +71,10 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
                     name: c.id!,
                     type: c.type,
                 }));
-                const child = this.schema.declareTable({ name: this.toDeclare.name, fields });
+                const child = this.schema.declareTable({ name: this.toDeclare.name, fields }, false, t);
                 setupChildPartition(parent, child, partitionOf.bound);
             } else {
-                const table = this.schema.declareTable(this.toDeclare);
+                const table = this.schema.declareTable(this.toDeclare, false, t);
                 if (partitionBy) {
                     setupPartitionedParent(table, partitionBy);
                 }
@@ -89,9 +85,6 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
             // definitions and their constraints are intentionally unused, not unsupported
             ignore(this.p);
         }
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

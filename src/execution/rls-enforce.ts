@@ -5,8 +5,103 @@ import { buildValue } from '../parser/expression-builder';
 import { withSelection } from '../parser/context';
 import { currentRole } from './roles';
 import { Policy, policyAppliesToCommand, policyAppliesToRole } from './rls';
+import { astVisitor, Expr, FromTable } from 'pgsql-ast-parser';
 
 export type RlsCommand = 'select' | 'insert' | 'update' | 'delete';
+
+/** tables read in a predicate's subqueries (FROM / JOIN), resolved against the table's schema */
+function tablesReadBy(owner: _ITable, exprs: (Expr | null | undefined)[]): _ITable[] {
+    const out = new Set<_ITable>();
+    const v = astVisitor(() => ({
+        fromTable: (f: FromTable) => {
+            const obj = owner.ownerSchema.getThisOrSiblingFor(f.name).getObject(f.name, { nullIfNotFound: true });
+            if (obj && (obj as any).type === 'table') {
+                out.add(obj as _ITable);
+            }
+            return f;
+        },
+    }));
+    for (const e of exprs) {
+        if (e) {
+            v.expr(e);
+        }
+    }
+    return [...out];
+}
+
+/** does any of these predicates contain a subquery ("sublink")? */
+function hasSubLinks(exprs: (Expr | null | undefined)[]): boolean {
+    let found = false;
+    const v = astVisitor(() => ({ selection: () => { found = true; return null as any; } }));
+    for (const e of exprs) {
+        if (e && !found) {
+            v.expr(e);
+        }
+    }
+    return found;
+}
+
+/**
+ * Postgres expands the policies of the relations a query touches - and, through the subqueries in
+ * those policies, of the relations they read - and refuses a cycle: a profiles policy that queries
+ * profiles (the usual "admins can see everyone" attempt) is "infinite recursion detected in policy
+ * for relation profiles", for any role RLS applies to and whether or not there are rows.
+ *
+ * Like its fireRIRrules, a relation joins the set being expanded, and is checked against it, only
+ * when its applicable policies contain a subquery: an UPDATE policy reading its own table whose
+ * SELECT policy is just `true` is fine. Returns the re-entered relation.
+ */
+function recursivePolicyRelation(table: _ITable, commands: RlsCommand[], roleName: string, expanding = new Set<_ITable>()): _ITable | null {
+    if (!table.rls.enabled) {
+        return null;
+    }
+    const exprs = table.rls.policies
+        .filter(p => policyAppliesToRole(p, roleName) && commands.some(c => policyAppliesToCommand(p, c)))
+        .flatMap(p => [p.using, p.withCheck]);
+    if (!hasSubLinks(exprs)) {
+        return null;
+    }
+    if (expanding.has(table)) {
+        return table;
+    }
+    expanding.add(table);
+    try {
+        for (const read of tablesReadBy(table, exprs)) {
+            // a subquery reads: its table's SELECT policies get expanded
+            const hit = recursivePolicyRelation(read, ['select'], roleName, expanding);
+            if (hit) {
+                return hit;
+            }
+        }
+        return null;
+    } finally {
+        expanding.delete(table);
+    }
+}
+
+const recursionCache = new WeakMap<_ITable, Map<string, _ITable | null>>();
+
+/** Throws postgres' error when expanding this table's policies for the current role recurses. */
+export function assertNoPolicyRecursion(table: _ITable, command: RlsCommand, t: _Transaction, readsColumns = false): void {
+    const role = currentRole(t).name;
+    // an UPDATE/DELETE that reads columns (WHERE, RETURNING, SET x = <column>) needs SELECT rights,
+    // so the table's SELECT policies are expanded too
+    const commands: RlsCommand[] = readsColumns && command !== 'select' ? [command, 'select'] : [command];
+    // policies can change (DDL): key the cache on them too
+    const key = `${role}|${commands.join(',')}|${(table.ownerSchema.db as any).schemaVersion}`;
+    let byKey = recursionCache.get(table);
+    if (!byKey) {
+        recursionCache.set(table, byKey = new Map());
+    }
+    let hit = byKey.get(key);
+    if (hit === undefined) {
+        hit = recursivePolicyRelation(table, commands, role);
+        byKey.set(key, hit);
+    }
+    if (hit) {
+        throw new QueryError(`infinite recursion detected in policy for relation "${hit.name}"`, '42P17');
+    }
+}
 
 /** True when the current role skips RLS entirely (superuser or BYPASSRLS). */
 export function bypassesRls(t: _Transaction): boolean {
@@ -64,7 +159,7 @@ class RlsSelection extends FilterBase {
         return null;
     }
 
-    constructor(private sel: _ISelection, private table: _ITable, private command: RlsCommand) {
+    constructor(private sel: _ISelection, private table: _ITable, private command: RlsCommand, private readsColumns = false) {
         super(sel);
         this.compiled = compilePolicies(sel, table.rls.policies);
     }
@@ -81,8 +176,23 @@ class RlsSelection extends FilterBase {
         if (!this.enforced(t)) {
             return this.sel.hasItem(raw, t);
         }
+        // index lookups (WHERE id = …) check rows here rather than enumerating
+        assertNoPolicyRecursion(this.table, this.command, t, this.readsColumns);
         return this.sel.hasItem(raw, t)
             && rowPasses(this.compiled, 'using', currentRole(t).name, this.command, raw, t);
+    }
+
+    /**
+     * WHERE on a policed table. Index-based filters (id = 1, IN, ranges) take their index from the
+     * column's origin - the raw table - and become a selection over it, which silently dropped this
+     * layer: under RLS, `select * from t where id = 2` returned rows no policy allowed. Filter the
+     * unprotected selection (keeping index lookups) and re-apply the policies on top.
+     */
+    filter(where: Expr | undefined | null): _ISelection {
+        if (!where) {
+            return this;
+        }
+        return new RlsSelection(this.sel.filter(where), this.table, this.command, this.readsColumns);
     }
 
     private enforced(t: _Transaction): boolean {
@@ -94,6 +204,7 @@ class RlsSelection extends FilterBase {
             yield* this.sel.enumerate(t);
             return;
         }
+        assertNoPolicyRecursion(this.table, this.command, t, this.readsColumns);
         const roleName = currentRole(t).name;
         for (const raw of this.sel.enumerate(t)) {
             if (rowPasses(this.compiled, 'using', roleName, this.command, raw, t)) {
@@ -112,11 +223,24 @@ class RlsSelection extends FilterBase {
 }
 
 /** Wrap a table's selection with row-level security read enforcement. */
-export function applyReadRls(table: _ITable, selection: _ISelection, command: RlsCommand): _ISelection {
+export function applyReadRls(table: _ITable, selection: _ISelection, command: RlsCommand, readsColumns = false): _ISelection {
     if (!table.rls.policies.length && !table.rls.enabled) {
         return selection;
     }
-    return new RlsSelection(selection, table, command);
+    return new RlsSelection(selection, table, command, readsColumns);
+}
+
+/** does an UPDATE/DELETE read the table's columns (and so need SELECT rights)? */
+export function statementReadsColumns(ast: { where?: Expr | null; returning?: any; sets?: { value: Expr }[] }): boolean {
+    if (ast.where || ast.returning?.length) {
+        return true;
+    }
+    let found = false;
+    const v = astVisitor(() => ({ ref: r => { found = true; return r; } }));
+    for (const set of ast.sets ?? []) {
+        v.expr(set.value);
+    }
+    return found;
 }
 
 /** Throws if a written row violates the WITH CHECK predicates for a command. */
@@ -124,6 +248,7 @@ export function checkWriteRls(table: _ITable, command: 'insert' | 'update', row:
     if (!table.rls.enabled || bypassesRls(t)) {
         return;
     }
+    assertNoPolicyRecursion(table, command, t);
     const compiled = compilePolicies(table.selection, table.rls.policies);
     if (!rowPasses(compiled, 'withCheck', currentRole(t).name, command, row, t)) {
         throw new QueryError(`new row violates row-level security policy for table "${table.name}"`, '42501');

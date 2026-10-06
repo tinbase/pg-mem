@@ -12,15 +12,9 @@ export class ExecuteCreateSequence extends ExecHelper implements _IStatementExec
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because the index sequence creation does support further rollbacks)
-        t = t.fullCommit();
 
         // create the sequence
         this.createSeq(t);
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 

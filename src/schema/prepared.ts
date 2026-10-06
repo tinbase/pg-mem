@@ -58,10 +58,11 @@ function startCall(db: _IDb, statements: Statement[]): _Transaction {
     if (open.aborted) {
         const first = statements[0]?.type;
         if (first === 'rollback' || first === 'commit') {
-            // the block is over either way; run the rest of the call on a fresh implicit tx
-            // (a COMMIT on an aborted block is a ROLLBACK in Postgres)
+            // the block is over either way (a COMMIT on an aborted block is a ROLLBACK in
+            // postgres): undo it, schema included, and carry on in whatever enclosed it
             statements.splice(0, 1);
-            return db.data.fork();
+            const after = open.explicitBlock?.rollback() ?? db.data;
+            return after.isChild ? after : db.data.fork();
         }
         db.sessionTx = open;
         throw new QueryError('current transaction is aborted, commands ignored until end of transaction block', '25P02');
@@ -86,7 +87,11 @@ function failCall(db: _IDb, state: _Transaction) {
     if (state.inExplicitBlock) {
         state.aborted = true;
         db.sessionTx = state;
+        return;
     }
+    // the call's implicit transaction is dropped, so its data is gone: put the schema back too
+    // (a failed migration must not leave half its tables behind)
+    state.discardAll();
 }
 
 let _paramList: Parameter[] | null = null;

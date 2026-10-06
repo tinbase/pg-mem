@@ -3,6 +3,7 @@ import { Expr, ExprBinary, TableConstraintForeignKey } from 'pgsql-ast-parser';
 import { asTable, CreateIndexColDef, _IConstraint, _ITable, _Transaction } from '../interfaces-private';
 import { nullIsh } from '../utils';
 import { deferCheck } from '../execution/deferred-checks';
+import { enqueueRi } from '../execution/ri-queue';
 
 export class ForeignKey implements _IConstraint {
 
@@ -129,8 +130,9 @@ export class ForeignKey implements _IConstraint {
                 right: b,
             }), equals[0]);
 
-            // check nothing matches
-            for (const local of table.selection.filter(expr).enumerate(dt)) {
+            // check nothing matches - as a queued RI action, see ri-queue.ts
+            enqueueRi(() => {
+            for (const local of [...table.selection.filter(expr).enumerate(dt)]) {
                 // ====== ON DELETE
                 switch (neu ? onUpdate : onDelete) {
                     case 'no action':
@@ -155,6 +157,7 @@ export class ForeignKey implements _IConstraint {
                         break;
                 }
             }
+            });
         }));
 
         // =====================

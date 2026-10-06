@@ -91,6 +91,10 @@ function defaultExpressionOf(table: _ITable, columnName: string | nil): string |
     if (!ast) {
         return null;
     }
+    const pg = pgExprText(ast);
+    if (pg !== null) {
+        return pg;
+    }
     try {
         // toSql renders defensively — `now()` comes out as `(now () )`. Postgres reports `now()`, and
         // consumers compare these strings, so collapse the padding and drop one layer of wrapping
@@ -108,6 +112,71 @@ function defaultExpressionOf(table: _ITable, columnName: string | nil): string |
     } catch {
         return null;
     }
+}
+
+const pgQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
+const KEYWORD_TEXT: Record<string, string> = {
+    current_date: 'CURRENT_DATE', current_timestamp: 'CURRENT_TIMESTAMP', localtimestamp: 'LOCALTIMESTAMP',
+    current_time: 'CURRENT_TIME', localtime: 'LOCALTIME', current_user: 'CURRENT_USER', current_role: 'CURRENT_ROLE',
+    session_user: 'SESSION_USER', user: 'CURRENT_USER',
+};
+
+/**
+ * A default expression as postgres' pg_get_expr prints it: literals as written (0.30, not 0.3),
+ * negative numbers quoted ('-1'::integer), a binary expression wrapped once - (now() + '2 days'::interval)
+ * - with bare operands, ARRAY[...], CURRENT_DATE. Null for shapes it does not know, which then go
+ * through the generic toSql rendering.
+ */
+function pgExprText(e: any): string | null {
+    const operand = (x: any) => pgExprText(x);
+    switch (e?.type) {
+        case 'string':
+            return pgQuote(e.value);
+        case 'integer':
+            // negative, or too big for int4 (then typed bigint): postgres prints it quoted
+            return e.value < 0 || e.value > 2147483647 ? pgQuote(String(e.valueText ?? e.value)) : String(e.valueText ?? e.value);
+        case 'numeric': {
+            const txt = e.raw ?? e.valueText ?? String(e.value);
+            return txt.startsWith('-') ? pgQuote(txt) : txt;
+        }
+        case 'boolean':
+            return e.value ? 'true' : 'false';
+        case 'null':
+            return 'NULL';
+        case 'keyword':
+            return KEYWORD_TEXT[e.keyword] ?? null;
+        case 'call': {
+            const args = (e.args ?? []).map(operand);
+            if (args.some((a: string | null) => a === null) || e.distinct || e.orderBy || e.filter || e.over) {
+                return null;
+            }
+            const fn = (e.function.schema ? e.function.schema + '.' : '') + e.function.name;
+            return `${fn}(${args.join(', ')})`;
+        }
+        case 'cast': {
+            const inner = operand(e.operand);
+            return inner === null ? null : `${inner}::${toSql.dataType(e.to as any)}`;
+        }
+        case 'binary': {
+            const l = operand(e.left), r = operand(e.right);
+            return l === null || r === null ? null : `(${l} ${e.op} ${r})`;
+        }
+        case 'unary': {
+            const v = operand(e.operand);
+            if (v === null) {
+                return null;
+            }
+            if (e.op === '-' && /^[\d.]+$/.test(v)) {
+                return pgQuote('-' + v);
+            }
+            return e.op === 'NOT' ? `(NOT ${v})` : `(${e.op}${v})`;
+        }
+        case 'array': {
+            const items = (e.expressions ?? []).map(operand);
+            return items.some((a: string | null) => a === null) ? null : `ARRAY[${items.join(', ')}]`;
+        }
+    }
+    return null;
 }
 
 /** Remove one paren pair only when it wraps the entire expression. */
@@ -256,7 +325,7 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
     }
 
     getIndex(forValue: IValue): _IIndex | nil {
-        if (forValue.id === 'table_name') {
+        if (forValue?.id === 'table_name') {
             return new TableIndex(this, forValue);
         }
         return null;

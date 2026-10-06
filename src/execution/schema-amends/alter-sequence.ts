@@ -19,15 +19,9 @@ export class AlterSequence extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because the index sequence creation does support further rollbacks)
-        t = t.fullCommit();
 
         // alter the sequence
         this.seq?.alter(t, this.p.change);
-
-        // new implicit transaction
-        t = t.fork();
 
         return this.noData(t, 'ALTER');
     }

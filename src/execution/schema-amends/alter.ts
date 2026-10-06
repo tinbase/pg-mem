@@ -18,10 +18,6 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
 
         let ignored = 0;
 
-        // commit pending data before making changes
-        //  (because  does not support further rollbacks)
-        t = t.fullCommit();
-
 
         for (const change of this.p.changes) {
             function ignoreChange() {
@@ -115,10 +111,6 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
 
             }
         }
-
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'ALTER');
     }
 }

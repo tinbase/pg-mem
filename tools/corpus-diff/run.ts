@@ -250,7 +250,14 @@ function templateInsert(m: TableMeta, override: Record<string, string> = {}): st
   return `insert into public.${ident(m.name)} (${cols.map((c) => ident(c.name)).join(', ')}) values (${vals.join(', ')})`;
 }
 
-function probesFor(m: TableMeta, all: TableMeta[]): Probe[] {
+/**
+ * A key value both engines share: one written in the project's SQL. A generated one
+ * (gen_random_uuid(), serial) differs between the engines, so probing for it on pg-mem with
+ * PGlite's value would compare two different rows.
+ */
+const sharedKey = (v: any, text: string) => v != null && (typeof v === 'number' ? text.includes(String(v)) : text.toLowerCase().includes(String(v).toLowerCase()));
+
+function probesFor(m: TableMeta, all: TableMeta[], text: string): Probe[] {
   const t = ident(m.name);
   const out: Probe[] = [];
   const P = (p: Omit<Probe, 'table'>) => out.push({ table: m.name, ...p });
@@ -264,6 +271,18 @@ function probesFor(m: TableMeta, all: TableMeta[]): Probe[] {
     for (const [label, role] of [['demo', DEMO], ['stranger', STRANGER], ['anon', ANON]] as const) {
       P({ kind: 'rls-write', probe: `update as ${label}`, sql: [`update public.${t} set ${ident(anyCol)} = ${ident(anyCol)}`], role });
       P({ kind: 'rls-write', probe: `delete as ${label}`, sql: [`delete from public.${t}`], role });
+    }
+  }
+  // the same through an index lookup (WHERE <pk> = <seeded key>): index paths must not skip RLS
+  if (m.sample && m.pk.length === 1 && sharedKey(m.sample[m.pk[0]], text)) {
+    const pkCol = m.cols.find(c => c.name === m.pk[0])!;
+    const where = `where ${ident(pkCol.name)} = ${literal(m.sample[pkCol.name], pkCol.type)}`;
+    for (const [label, role] of [['anon', ANON], ['demo', DEMO], ['stranger', STRANGER]] as const) {
+      P({ kind: 'rls-read', probe: `pk lookup as ${label}`, sql: [`select count(*)::int as n from public.${t} ${where}`], role, rows: true });
+      if (anyCol) {
+        P({ kind: 'rls-write', probe: `update by pk as ${label}`, sql: [`update public.${t} set ${ident(anyCol)} = ${ident(anyCol)} ${where}`], role });
+        P({ kind: 'rls-write', probe: `delete by pk as ${label}`, sql: [`delete from public.${t} ${where}`], role });
+      }
     }
   }
   // updated_at trigger: inside one transaction now() is constant, so a row the trigger touched has updated_at = now()
@@ -290,7 +309,7 @@ function probesFor(m: TableMeta, all: TableMeta[]): Probe[] {
       if (c.type === 'smallint') bad.push(['int2 overflow', '70000']);
       if (/^character varying/.test(c.type)) bad.push(['varchar too long (if bounded)', q('x'.repeat(10_001))]);
       if (m.fks.some((f) => f.cols.includes(c.name))) bad.push(['dangling foreign key', c.type === 'uuid' ? q(crypto.randomUUID()) : q('no-such-parent')]);
-      if (m.sample && [m.pk, ...m.unique].some((k) => k.length === 1 && k[0] === c.name)) bad.push(['duplicate key', literal(m.sample[c.name], c.type)]);
+      if (m.sample && [m.pk, ...m.unique].some((k) => k.length === 1 && k[0] === c.name) && sharedKey(m.sample[c.name], text)) bad.push(['duplicate key', literal(m.sample[c.name], c.type)]);
       for (const ch of m.checks.filter((ch) => ch.cols.includes(c.name))) {
         if (c.type === 'text' || c.type.startsWith('character')) bad.push([`check violation ${ch.def.slice(0, 60)}`, q('__bogus__')]);
         else if (/int|numeric|real|double/.test(c.type)) bad.push([`check violation ${ch.def.slice(0, 60)}`, '-999999']);
@@ -417,7 +436,7 @@ async function diffProject(p: Project): Promise<{ diffs: Diff[]; stats: Record<s
   // probes (generated from the oracle's catalogue)
   const metas: TableMeta[] = [];
   for (const t of tables) metas.push(await tableMeta(ref.eng, t));
-  const probes = [...metas.flatMap((m) => probesFor(m, metas)), ...globalProbes(metas)];
+  const probes = [...metas.flatMap((m) => probesFor(m, metas, p.text)), ...globalProbes(metas)];
   const memFp0 = await fingerprint(mem.eng, memTables);
   for (const pr of probes) {
     bump(`probe:${pr.kind}`);

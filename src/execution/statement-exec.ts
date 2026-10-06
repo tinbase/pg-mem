@@ -35,6 +35,9 @@ import { CreateCompositeType } from './schema-amends/create-composite-type';
 import { InsteadOfView } from './records-mutations/instead-of';
 import { MergeExec } from './records-mutations/merge';
 import { hasInsteadOf, TriggerOp } from './triggers';
+import { isSchemaStatement } from '../persistence';
+import { captureSchema } from '../schema-snapshot';
+import { withRiQueue } from './ri-queue';
 import { _IView, _ITable } from '../interfaces-private';
 
 const detailsIncluded = Symbol('errorDetailsIncluded');
@@ -355,7 +358,11 @@ export class StatementExec implements _IStatement {
             if (!this.executor) {
                 throw new Error('Statement not prepared')
             }
-            const result = this.executor.execute(t);
+            if (isSchemaStatement(this.statement) || this.statement.type === 'do') {
+                // DDL is transactional: remember the schema so a rollback can put it back
+                t.checkpointSchema(() => captureSchema(this.schema.db));
+            }
+            const result = withRiQueue(() => this.executor!.execute(t));
 
             // post-execution
             for (const s of this.onExecutedCallbacks) {
