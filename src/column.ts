@@ -221,9 +221,8 @@ export class ColRef implements _Column {
         const nn = newId;
         this.expression = columnEvaluator(this.table, newId, newType);
 
-        // replace in table
-        this.table.columnMgr.delete(on);
-        this.table.columnMgr.set(nn, this);
+        // replace in table, keeping the column's position (postgres never moves a column)
+        this.table.columnMgr.replace(on, nn, this);
     }
 
     drop(t: _Transaction): void {

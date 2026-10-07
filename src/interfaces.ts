@@ -195,6 +195,8 @@ export interface ToCompile {
     args: ArgDefDetails[];
     /** Expected return type (if any) */
     returns?: IType | nil;
+    /** RETURNS SETOF <type>: `returns` is then that type's array, one element per row */
+    setof?: boolean;
 }
 
 export class AdvancedResult {

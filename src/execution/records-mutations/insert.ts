@@ -30,6 +30,21 @@ export class Insert extends MutationDataSourceBase {
         // init super
         super(table, selection, ast);
 
+        // postgres checks each VALUES row against the target columns before the rows against
+        // each other, so a seed row with one value too many says so (not "VALUES lists must
+        // all be the same length")
+        if (ast.insert.type === 'values') {
+            const target = ast.columns?.length ?? table.selection.columns.length;
+            for (const row of ast.insert.values) {
+                if (row.length > target) {
+                    throw new QueryError('INSERT has more expressions than target columns', '42601');
+                }
+                if (ast.columns && row.length < target) {
+                    throw new QueryError('INSERT has more target columns than expressions', '42601');
+                }
+            }
+        }
+
         // get data to insert
         this.valueRawSource = ast.insert.type === 'values'
             ? buildValues(ast.insert, true)

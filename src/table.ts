@@ -61,6 +61,20 @@ class ColumnManager {
         this.invalidateColumns();
         return this.map.delete(name);
     }
+
+    /** Puts `colDef` under `newName` where `oldName` was, keeping the column's position (rename, retype) */
+    replace(oldName: string, newName: string, colDef: ColRef) {
+        this.invalidateColumns();
+        const entries = Array.from(this.map.entries());
+        this.map.clear();
+        for (const [k, v] of entries) {
+            if (k === oldName) {
+                this.map.set(newName, colDef);
+            } else {
+                this.map.set(k, v);
+            }
+        }
+    }
 }
 
 export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _ITable {

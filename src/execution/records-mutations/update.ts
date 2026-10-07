@@ -63,7 +63,9 @@ export class Update extends MutationDataSourceBase {
 
             //  => REGULAR UPDATE
             // row-level security: UPDATE can only affect rows visible via UPDATE policies
-            mutatedSel = applyReadRls(into, into.selection, 'update', statementReadsColumns(ast as any))
+            // `update t alias set ... where alias.col ...`: the alias names the table, as in FROM
+            const base = ast.table.alias ? into.selection.setAlias(ast.table.alias) : into.selection;
+            mutatedSel = applyReadRls(into, base, 'update', statementReadsColumns(ast as any))
                 .filter(ast.where);
         }
 

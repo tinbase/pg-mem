@@ -160,7 +160,10 @@ function buildRawSelectSubject(p: SelectFromStatement): _ISelection | nil {
                 const fnName = from.alias?.name ?? from.function?.name;
                 // built against the left FROM items: function calls referencing them
                 // are implicitly lateral in postgres
-                const fromValue: IValue = sel ? withSelection(sel, () => buildValue(from)) : buildValue(from);
+                // a first FROM item reads no row of its own: build it against the empty selection,
+                // so `from f(outer.col)` in a subquery resolves outer.col as a correlated reference
+                // rather than as a column of whatever selection happens to be current
+                const fromValue: IValue = withSelection(sel ?? buildCtx().schema.dualTable.selection, () => buildValue(from));
                 if ((from.lateral || !fromValue.isConstant) && sel) {
                     if (!ArrayType.matches(fromValue.type) || RecordType.matches(fromValue.type.of)) {
                         throw new NotSupported('lateral function calls returning records');

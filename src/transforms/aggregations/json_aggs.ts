@@ -17,12 +17,10 @@ class JsonAggExpr implements AggregationComputer<any[]> {
         return {
             feedItem: (item) => {
                 const value = this.exp.get(item, t);
-                if (!nullIsh(value)) {
-                    // Same conversion row_to_json does: the aggregated body must
-                    // carry json numbers for numeric/bigint, not the strings
-                    // pg-mem holds them as internally.
-                    full.push(toJsonValue(value, this.exp.type));
-                }
+                // a NULL input is a json null in the result, as in postgres ([1, null, 2]).
+                // Same conversion row_to_json does: the aggregated body must carry json
+                // numbers for numeric/bigint, not the strings pg-mem holds them as internally.
+                full.push(nullIsh(value) ? null : toJsonValue(value, this.exp.type));
             },
             finish: () => full.length === 0 ? null : full,
         }

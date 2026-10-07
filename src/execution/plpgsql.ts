@@ -541,6 +541,10 @@ interface Helpers {
     prepareSql(sql: string): (ctx: RunCtx) => any;
     /** run a dynamic (runtime-built) SQL string */
     runDynamic(ctx: RunCtx, sqlText: string): any;
+    /** the same toolbox with extra variables in scope for embedded SQL */
+    withVars(extra: { name: string; value: IValue }[]): Helpers;
+    /** rewrites embedded SQL for the enclosing FOR-loop records (rec.col -> variable) */
+    rewriteSql?: (sql: string) => string;
 }
 
 /** does this block (recursively) use RETURN NEXT / RETURN QUERY? => set-returning */
@@ -610,6 +614,7 @@ function makeHelpers(schema: _ISchema, params: Parameter[], returns: _IType | ni
     };
     const outColumns = ((returns as any)?.of?.columns as { name: string }[] | undefined) ?? null;
     return {
+        withVars: (extra) => makeHelpers(schema, [...params, ...extra.map((x, i) => ({ index: params.length + i, value: x.value }))], returns, setof),
         returns,
         setof,
         compileExpr,
@@ -864,6 +869,16 @@ function expandRowTypes(toks: string[], schema: _ISchema): string[] {
     return out;
 }
 
+/** `rec.col` -> fieldVar(col) in SQL text, outside string literals and quoted identifiers, for known columns */
+function rewriteRecordFields(sql: string, rec: string, known: Set<string>, fieldVar: (col: string) => string): string {
+    const re = new RegExp(`(^|[^\\w$."])${rec.replace(/[^\w]/g, '')}\\s*\\.\\s*([a-zA-Z_][\\w$]*)`, 'gi');
+    // split on '…' and "…" so literals and quoted identifiers are left alone
+    return sql.split(/('(?:[^']|'')*'|"(?:[^"]|"")*")/).map((part, i) => i % 2
+        ? part
+        : part.replace(re, (m, pre, col) => known.has(col.toLowerCase()) ? pre + fieldVar(col.toLowerCase()) : m)
+    ).join('');
+}
+
 function parseTypeDef(typeSrc: string): any {
     const e = parseExpr(`null::${typeSrc}`);
     if (e.type !== 'cast') {
@@ -1007,7 +1022,27 @@ function compileBody(stmts: GStmt[], h: Helpers): GCompiled[] {
                 // (aliased) selection; the current row is fed to the body's expressions
                 const sel = h.querySelection(s.sql).setAlias(s.varName);
                 const holder: { row: any } = { row: DUMMY_ROW };
-                const body = compileBody(s.body, { ...h, compileExpr: h.mkCompiler(sel, () => holder.row) });
+                // embedded SQL in the body (`update … set x = rec.col`) sees `rec.col` as a table-qualified
+                // column, not a variable: expose each field as a variable and rewrite the references to it
+                const rec = s.varName.toLowerCase();
+                const fields = sel.columns.filter(c => !!c.id);
+                const fieldVar = (col: string) => `__rec_${rec}__${col}`;
+                const withFields = h.withVars(fields.map(c => ({
+                    name: fieldVar(c.id!),
+                    value: new Evaluator(c.type, fieldVar(c.id!), `plpgsql_rec_${rec}_${c.id}`, [],
+                        (_raw, t) => c.get(holder.row, t), { forceNotConstant: true }),
+                })));
+                const known = new Set(fields.map(c => c.id!.toLowerCase()));
+                // enclosing loops' records first, so a nested loop still sees them
+                const rewrite = (sql: string) => rewriteRecordFields(h.rewriteSql ? h.rewriteSql(sql) : sql, rec, known, fieldVar);
+                const body = compileBody(s.body, {
+                    ...withFields,
+                    compileExpr: h.mkCompiler(sel, () => holder.row),
+                    mkCompiler: withFields.mkCompiler,
+                    prepareSql: (sql) => withFields.prepareSql(rewrite(sql)),
+                    querySelection: (sql) => withFields.querySelection(rewrite(sql)),
+                    rewriteSql: rewrite,
+                });
                 return {
                     run(ctx) {
                         for (const row of sel.enumerate(ctx.t)) {

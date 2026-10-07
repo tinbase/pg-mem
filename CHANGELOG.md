@@ -4,6 +4,19 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.2
+
+Gaps found by running 80 production projects' migrations and seeds through the agent's validator on pg-mem and on PGlite; all 80 now match. Requires `@tinbase/pgsql-ast-parser` 12.2.1.
+
+- **Wrong results, fixed:** an aggregate inside a select-list subquery aggregated the *outer* query (`select id, (select count(*) from c where c.p = p.id) from p` returned one row); `agg(x ORDER BY y)` ignored its ORDER BY; `json_agg` / `jsonb_agg` dropped NULL inputs (postgres keeps them as json null).
+- `f(unnest(arr))` calls `f` per element (`lower(unnest(emails))` resolved to the range overload); `RETURNS SETOF <scalar>` SQL functions.
+- A set-returning call in a subquery's FROM reads the outer row (`from jsonb_array_elements(outer.col)`).
+- `UPDATE t alias` / `DELETE FROM t alias`: the alias names the table, in the statement and its subqueries.
+- plpgsql: a `FOR rec IN <query>` record's fields are usable in SQL statements inside the loop (`update … set x = rec.col`), including nested loops.
+- `json -> key` / `->>` with a column, variable or expression key.
+- `ALTER COLUMN … TYPE` and `RENAME COLUMN` keep the column's position.
+- `INSERT … VALUES` checks each row against the target columns first ("INSERT has more expressions than target columns").
+
 ## 4.0.1
 
 - Comparisons across type categories fail with Postgres' own error, `operator does not exist: uuid = text` (was `cannot cast type text to uuid`), types spelled as Postgres spells them. Also for `x IN (select col ...)`. The SQL that is rejected does not change.
