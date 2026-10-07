@@ -4,6 +4,53 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.0
+
+Postgres parity for validating real Supabase migrations: pg-mem now rejects what Postgres rejects, rolls back schema changes, and enforces row-level security on every read and write path. Found by running 250 real RapidNative projects' migrations and seeds through pg-mem and PGlite side by side (`tools/corpus-diff`); all 5 sets of 50 now match. Requires `@tinbase/pgsql-ast-parser` 12.2.0.
+
+### Breaking changes
+
+- **Typed values no longer cross type categories implicitly.** `uuid_col = text_col`, `bool = text`, `IN`, `COALESCE`, `LIKE` and function arguments fail as in Postgres ("operator does not exist: uuid = text"). Untyped literals and bind parameters still coerce.
+- **`numeric` and `bigint` always read back as strings**, as node-postgres returns them, whatever the insert path.
+- **DDL is transactional.** `ROLLBACK`, `ROLLBACK TO SAVEPOINT` or a failed call undoes schema changes, including a `ROLLBACK` inside a multi-statement call; a failed DDL statement leaves no partial schema.
+- **`ON CONFLICT (cols) DO NOTHING RETURNING` returns nothing for a conflicting row** (it returned the existing row).
+- `date - date` returns an integer (days), as in Postgres.
+
+### Validation
+
+- `CREATE POLICY` binds its predicates: unknown columns, bad operators, non-boolean predicates, `USING` on INSERT, `WITH CHECK` on SELECT/DELETE fail at creation.
+- `ALTER COLUMN TYPE` / `DROP COLUMN` refuse columns a policy or foreign key depends on. `CREATE TRIGGER` resolves its function; `GRANT` / `CREATE POLICY ... TO` check the role exists.
+- int2/int4/int8 range checks; strict text-to-number parsing.
+
+### Row-level security
+
+- **Security fix: RLS was skipped on index lookups** — `select ... where id = 2`, and `UPDATE` / `DELETE ... WHERE <pk>`, reached rows no policy allowed.
+- **Security fix: `INSERT ... ON CONFLICT DO UPDATE`** updated rows the role could not update; the conflicting row now has to pass the UPDATE and SELECT `USING` policies, and the result UPDATE `WITH CHECK`.
+- "infinite recursion detected in policy for relation", following Postgres' expansion rules, for the roles whose policies recurse.
+- A policy's subqueries see the other tables' policies as they are when the query runs (not as they were at `CREATE POLICY`).
+- `SECURITY DEFINER` functions run as their owner.
+
+### Transactions
+
+- `BEGIN ... ROLLBACK` across separate query calls rolls back; a failed statement, including one that fails to compile, aborts the block; `ROLLBACK TO SAVEPOINT` recovers an aborted block without ending it.
+- Savepoints capture the schema lazily (on the first DDL after them) and release frees it.
+- Referential actions run breadth-first, like Postgres RI triggers.
+- `now()` / `current_date` are transaction-stable.
+
+### Also
+
+- plpgsql: `->>` in bodies, `%ROWTYPE` / `%TYPE`. `CREATE OR REPLACE TRIGGER`.
+- `information_schema.columns` reports Postgres type names and `pg_get_expr`-style defaults; Postgres names for unnamed constraints and indexes.
+- Timestamp/date arithmetic, `interval::text`, `record::text`, `jsonb ? ?| ?&`.
+
+### Footprint (Node 24, the agent validator's workload)
+
+| | PGlite | pg-mem |
+|---|---|---|
+| first ready instance | ~670 ms, +590–830 MB RSS | ~33 ms, +40 MB |
+| each extra concurrent session | ~+255 MB | ~+7 MB |
+| browser download (gz) | ~6.7 MB | ~0.19 MB |
+
 ## 3.3.0
 
 Schema introspection reports what the engine actually knows.
