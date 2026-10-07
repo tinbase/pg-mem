@@ -72,6 +72,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             throw new QueryError(`policy "${policy.name}" for table "${this.name}" already exists`, '42710');
         }
         this.rls.policies.push(policy);
+        this.db.onSchemaChange();
     }
 
     dropPolicy(name: string, ifExists: boolean): void {
@@ -83,6 +84,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             throw new QueryError(`policy "${name}" for table "${this.name}" does not exist`, '42704');
         }
         this.rls.policies.splice(idx, 1);
+        this.db.onSchemaChange();
     }
 
     setRowLevelSecurity(action: 'enable' | 'disable' | 'force' | 'no force'): void {
@@ -92,6 +94,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             case 'force': this.rls.forced = true; break;
             case 'no force': this.rls.forced = false; break;
         }
+        this.db.onSchemaChange();
     }
 
     readonly triggers: TableTriggers = emptyTriggers();

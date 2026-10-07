@@ -151,9 +151,13 @@ function rowPasses(compiled: CompiledPolicy[], kind: 'using' | 'withCheck', role
     return sawPermissive && permissiveOk && restrictiveOk;
 }
 
+/** tables whose policies are being compiled: a policy subquery reading one of them is a policy recursion */
+const compiling = new Set<_ITable>();
+
 /** Runtime read-visibility filter: applied only when RLS is on and the role doesn't bypass. */
 class RlsSelection extends FilterBase {
-    private compiled: CompiledPolicy[];
+    /** null: built while compiling this table's own policies (recursion, reported at run time) */
+    private compiled: CompiledPolicy[] | null;
 
     get index() {
         return null;
@@ -161,7 +165,25 @@ class RlsSelection extends FilterBase {
 
     constructor(private sel: _ISelection, private table: _ITable, private command: RlsCommand, private readsColumns = false) {
         super(sel);
-        this.compiled = compilePolicies(sel, table.rls.policies);
+        if (compiling.has(table)) {
+            // compiling would recurse forever. Postgres reports this only for the roles whose
+            // policies actually recurse, so leave it to assertNoPolicyRecursion at run time.
+            this.compiled = null;
+            return;
+        }
+        compiling.add(table);
+        try {
+            this.compiled = compilePolicies(sel, table.rls.policies);
+        } finally {
+            compiling.delete(table);
+        }
+    }
+
+    private policies(): CompiledPolicy[] {
+        if (!this.compiled) {
+            throw new QueryError(`infinite recursion detected in policy for relation "${this.table.name}"`, '42P17');
+        }
+        return this.compiled;
     }
 
     entropy(t: _Transaction) {
@@ -179,7 +201,7 @@ class RlsSelection extends FilterBase {
         // index lookups (WHERE id = …) check rows here rather than enumerating
         assertNoPolicyRecursion(this.table, this.command, t, this.readsColumns);
         return this.sel.hasItem(raw, t)
-            && rowPasses(this.compiled, 'using', currentRole(t).name, this.command, raw, t);
+            && rowPasses(this.policies(), 'using', currentRole(t).name, this.command, raw, t);
     }
 
     /**
@@ -206,8 +228,9 @@ class RlsSelection extends FilterBase {
         }
         assertNoPolicyRecursion(this.table, this.command, t, this.readsColumns);
         const roleName = currentRole(t).name;
+        const compiled = this.policies();
         for (const raw of this.sel.enumerate(t)) {
-            if (rowPasses(this.compiled, 'using', roleName, this.command, raw, t)) {
+            if (rowPasses(compiled, 'using', roleName, this.command, raw, t)) {
                 yield raw;
             }
         }

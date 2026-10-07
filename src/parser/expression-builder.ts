@@ -39,6 +39,11 @@ export function uncache(data: _ISelection) {
     builtLru.del(data);
 }
 
+/** Drops every cached build: a build can embed schema state (e.g. another table's policies in a subquery) */
+export function uncacheAll() {
+    builtLru.reset();
+}
+
 function _buildValue(val: Expr): IValue {
     // cache expressions build (they almost are always rebuilt several times in a row)
     const data = buildCtx().selection;
@@ -383,6 +388,15 @@ function buildIn(left: Expr, array: Expr, inclusive: boolean): IValue {
     }
     // `x IN (subquery)` needs the subquery's rows as a list, not a scalar
     let rightValue = isSubqueryNode(array) ? buildSelectAsArray(array as any) : _buildValue(array);
+    if (isSubqueryNode(array)) {
+        // `x IN (select col ...)` compares x with the column's type: `auth.uid() in (select <text col>)`
+        // is "operator does not exist: uuid = text", like the list and = forms
+        const col = (rightValue.type as ArrayType).of;
+        const leftUnknown = leftValue.isConstantLiteral && leftValue.type.primary === DataType.text;
+        if (col && !leftUnknown && crossesTypeCategory(leftValue.type, col)) {
+            throw new QueryError(`operator does not exist: ${leftValue.type.name} = ${col.name}`, '42883');
+        }
+    }
     if (array.type !== 'list' && rightValue.type.primary !== DataType.list && rightValue.type.primary !== DataType.array) {
         // `x IN (y)` - the parser drops the parens of a one-element list
         reconciliateTypes([leftValue, rightValue]);

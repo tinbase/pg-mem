@@ -9,6 +9,7 @@ import { buildSelection } from './transforms/selection';
 import { buildAlias } from './transforms/alias';
 import { buildFilter } from './transforms/build-filter';
 import { Adapters } from './adapters';
+import { uncacheAll } from './parser/expression-builder';
 import { Transaction } from './transaction';
 import { buildGroupBy } from './transforms/aggregation';
 import { buildLimit } from './transforms/limit';
@@ -81,6 +82,7 @@ class MemoryDb implements _IDb {
 
     onSchemaChange() {
         this.schemaVersion++;
+        uncacheAll();
         this.raiseGlobal('schema-change', this);
     }
 

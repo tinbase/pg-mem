@@ -75,7 +75,8 @@ describe('corpus parity', () => {
 
         it('rejects comparisons postgres has no operator for', () => {
             for (const e of ['u = s', 's = u', 'b = s', 's = true', 'v = u', 'u in (s)', 'u is not distinct from s',
-                'coalesce(u, s) is null', `s in ('a', 1)`, 'lower(u) = s', 's like 1', `i like 'x'`]) {
+                'coalesce(u, s) is null', `s in ('a', 1)`, 'lower(u) = s', 's like 1', `i like 'x'`,
+                'u in (select s from t)', 'u not in (select s from t)', 's in (select u from t)']) {
                 rejects(e);
             }
         });
@@ -412,6 +413,53 @@ describe('corpus parity', () => {
             expect(many(`select count(*)::int as n from cats`)).toEqual([{ n: 1 }]);
             none(`reset role`);
             expect(many(`select count(*)::int as n from profiles`)).toEqual([{ n: 0 }]);
+        });
+    });
+
+    describe('a policy subquery sees the other table\'s policies as they are when it runs', () => {
+        // the check CREATE POLICY runs used to leave its build cached, so enforcement reused a
+        // subquery compiled under the other table's policies as they were at CREATE POLICY time
+        beforeEach(() => none(`create role authenticated;
+            create table members (team_id int, user_id text); create table teams (id int primary key);
+            insert into teams values (1), (2); insert into members values (1, 'u1'), (2, 'u2');
+            alter table teams enable row level security; alter table members enable row level security`));
+        const teams = () => {
+            none(`set role authenticated`);
+            try {
+                return many(`select id from teams order by id`).map(r => r.id);
+            } finally {
+                none(`reset role`);
+            }
+        };
+
+        it('a policy created after the one that reads it applies', () => {
+            none(`create policy t on teams for select using (exists (select 1 from members m where m.team_id = teams.id));
+                create policy m on members for select using (user_id = 'u1')`);
+            expect(teams()).toEqual([1]);
+        });
+
+        it('narrowing the other table\'s policy narrows the result', () => {
+            none(`create policy m on members for select using (true);
+                create policy t on teams for select using (exists (select 1 from members m where m.team_id = teams.id))`);
+            expect(teams()).toEqual([1, 2]);
+            none(`drop policy m on members; create policy m on members for select using (user_id = 'u1')`);
+            expect(teams()).toEqual([1]);
+            none(`alter table members disable row level security`);
+            expect(teams()).toEqual([1, 2]);
+        });
+
+        it('replacing a recursive policy clears the recursion error', () => {
+            none(`create policy t on teams for select using (exists (select 1 from teams x where x.id = teams.id))`);
+            expectQueryError(() => teams(), /infinite recursion detected in policy for relation "teams"/);
+            none(`drop policy t on teams; create policy t on teams for select using (id = 1)`);
+            expect(teams()).toEqual([1]);
+        });
+
+        it('adding a recursive policy after a clean query reports the recursion', () => {
+            none(`create policy t on teams for select using (id = 1)`);
+            expect(teams()).toEqual([1]);
+            none(`create policy t2 on teams for select using (exists (select 1 from teams x where x.id = teams.id))`);
+            expectQueryError(() => teams(), /infinite recursion detected in policy for relation "teams"/);
         });
     });
 
