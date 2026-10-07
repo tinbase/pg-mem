@@ -124,6 +124,13 @@ describe('corpus parity', () => {
             }
         });
 
+        it('says which operator does not exist, as postgres does', () => {
+            expectQueryError(() => many(`select 1 from t where u = s`), /operator does not exist: uuid = text/);
+            expectQueryError(() => many(`select 1 from t where b = s`), /operator does not exist: boolean = text/);
+            expectQueryError(() => many(`select 1 from t where s = i`), /operator does not exist: text = integer/);
+            expectQueryError(() => many(`select 1 from t where u in (select s from t)`), /operator does not exist: uuid = text/);
+        });
+
         it('still coerces untyped literals and widens within a category', () => {
             for (const e of [`u = '00000000-0000-0000-0000-000000000001'`, `i = '1'`, 'i = bi', 'bi = i', 'i = n', 'd = ts', 'ts > d',
                 'd = now()', 's = v', 'u::text = s', `s || i = 'x1'`, `j ? s`, `concat(u, 'x') = s`]) {
