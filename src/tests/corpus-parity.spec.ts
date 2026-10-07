@@ -548,6 +548,126 @@ describe('corpus parity', () => {
         });
     });
 
+    describe('set-returning calls inside other calls', () => {
+        // from a production migration: a lookup by emails, `email = any (select lower(unnest(_emails)))`
+        it('applies the outer function to each element', () => {
+            expect(many(`select lower(unnest(array['A', 'b'])) as v`)).toEqual([{ v: 'a' }, { v: 'b' }]);
+            expect(many(`select upper(lower(unnest(array['Ab', 'cD']))) as v`)).toEqual([{ v: 'AB' }, { v: 'CD' }]);
+            expect(many(`select length(unnest(array['ab', 'cde'])) as n`)).toEqual([{ n: 2 }, { n: 3 }]);
+            expect(many(`select lower(unnest(null::text[])) as v`)).toEqual([]);
+        });
+
+        it('works in ANY / IN subqueries and SQL functions', () => {
+            none(`create table u (email text); insert into u values ('a@x.io'), ('B@X.IO'), ('c@x.io');
+                create function n(_e text[]) returns int language sql stable as
+                    $$ select count(*)::int from u where lower(email) = any (select lower(unnest(_e))) $$`);
+            expect(many(`select n(array['b@x.io', 'C@x.io', 'zz']) as n`)).toEqual([{ n: 2 }]);
+            expect(many(`select count(*)::int as n from u where lower(email) in (select lower(unnest(array['A@X.IO'])))`)).toEqual([{ n: 1 }]);
+        });
+
+        it('RETURNS SETOF <scalar> returns one value per row, and checks the column type', () => {
+            none(`create function f(_e text[]) returns setof text language sql as $$ select lower(unnest(_e)) $$`);
+            expect(many(`select * from f(array['A', 'b'])`)).toEqual([{ f: 'a' }, { f: 'b' }]);
+            expectQueryError(() => none(`create function g() returns setof int language sql as $$ select 'x'::text $$`), /return type mismatch/);
+        });
+    });
+
+    describe('ALTER COLUMN keeps the column where it is', () => {
+        // a production migration retyped user_id text -> uuid; generated types then listed it last
+        it('on retype and rename', () => {
+            none(`create table v (id int, user_id text, created_at timestamptz default now(), note text);
+                alter table v alter column user_id type uuid using user_id::uuid;
+                alter table v rename column note to body`);
+            expect(many(`select column_name from information_schema.columns where table_name = 'v' order by ordinal_position`).map(r => r.column_name))
+                .toEqual(['id', 'user_id', 'created_at', 'body']);
+            expect(db.public.query(`select * from v`).fields.map(f => f.name)).toEqual(['id', 'user_id', 'created_at', 'body']);
+        });
+    });
+
+    describe('plpgsql FOR-loop records in embedded SQL', () => {
+        // from a production data-fix migration: `for m in select … from (values …) as t(old_value, new_value)
+        // loop update … set x = replace(x, m.old_value, m.new_value) …`
+        beforeEach(() => none(`create table c (id int, p text, note text); insert into c values (1, '/a.jpg', 'x'), (2, '/b.jpg', 'y')`));
+        it('an UPDATE in the loop reads the record\'s fields', () => {
+            none(`do $$ declare m record; begin
+                for m in select * from (values ('/a.jpg', '/A.jpg')) as t(old_value, new_value) loop
+                    update c set p = replace(p, m.old_value, m.new_value) where p like '%' || m.old_value || '%';
+                end loop; end $$`);
+            expect(many(`select p from c order by id`)).toEqual([{ p: '/A.jpg' }, { p: '/b.jpg' }]);
+        });
+        it('leaves string literals alone, and nested loops see the outer record', () => {
+            none(`do $$ declare a record; b record; begin
+                for a in select id from c loop
+                    for b in select a.id * 10 as big loop
+                        update c set note = 'a.id=' || b.big::text where id = a.id;
+                    end loop;
+                end loop; end $$`);
+            expect(many(`select note from c order by id`)).toEqual([{ note: 'a.id=10' }, { note: 'a.id=20' }]);
+        });
+    });
+
+    describe('aggregates with ORDER BY, and json_agg NULLs', () => {
+        beforeEach(() => none(`create table t (g int, x int, s text); insert into t values (1, 2, 'b'), (1, 1, 'a'), (1, null, null), (2, 5, 'e'), (2, 4, 'd')`));
+        it('feeds rows in the aggregate\'s ORDER BY', () => {
+            expect(many(`select jsonb_agg(x order by x desc nulls last) as v from t where g = 1`)).toEqual([{ v: [2, 1, null] }]);
+            expect(many(`select g, string_agg(s, ',' order by s desc) as v from t group by g order by g`)).toEqual([{ g: 1, v: 'b,a' }, { g: 2, v: 'e,d' }]);
+            expect(many(`select array_agg(x order by s) as v from t where g = 2`)).toEqual([{ v: [4, 5] }]);
+            expect(many(`select jsonb_agg(x order by x) filter (where x > 1) as v from t`)).toEqual([{ v: [2, 4, 5] }]);
+        });
+        it('json_agg / jsonb_agg keep NULL inputs as json null', () => {
+            expect(many(`select jsonb_agg(x order by x nulls first) as v from t where g = 1`)).toEqual([{ v: [null, 1, 2] }]);
+            expect(many(`select json_agg(x) as v from t where x is null`)).toEqual([{ v: [null] }]);
+            expect(many(`select jsonb_agg(x) as v from t where false`)).toEqual([{ v: null }]);
+        });
+    });
+
+    describe('json -> / ->> with a non-literal key', () => {
+        // from a production migration: jsonb_array_elements(tc.credits -> grp), grp a plpgsql variable
+        it('takes a column, an expression or a variable as the key', () => {
+            none(`create table d (j jsonb, k text, i int); insert into d values ('{"cast": [{"name": "A"}, {"name": "B"}]}', 'cast', 1), ('[10, 20, 30]', 'x', -1)`);
+            expect(many(`select j -> k -> 0 ->> 'name' as v from d`)).toEqual([{ v: 'A' }, { v: null }]);
+            expect(many(`select j -> i as v from d`)).toEqual([{ v: null }, { v: 30 }]);
+            expect(many(`select jsonb_array_length(j -> (k)) as n from d where jsonb_typeof(j -> k) = 'array'`)).toEqual([{ n: 2 }]);
+            none(`do $$ declare grp text; begin foreach grp in array array['cast'] loop
+                update d set k = (select string_agg(e ->> 'name', ',' order by ord) from jsonb_array_elements(d.j -> grp) with ordinality as a(e, ord)) where jsonb_typeof(d.j -> grp) = 'array';
+                end loop; end $$`);
+            expect(many(`select k from d where i = 1`)).toEqual([{ k: 'A,B' }]);
+        });
+    });
+
+    describe('correlated set-returning calls in a subquery FROM, and UPDATE/DELETE aliases', () => {
+        // from a production migration: update public.titles_cache tc set credits = jsonb_set(tc.credits, …,
+        //   (select … from jsonb_array_elements(tc.credits -> grp) with ordinality as a(e, ord)))
+        beforeEach(() => none(`create table d (id int, j jsonb, k text); insert into d values (1, '{"c": [{"n": "A"}, {"n": "B"}]}', null), (2, '{"c": [{"n": "C"}]}', null)`));
+        it('reads the outer row', () => {
+            expect(many(`select id, (select string_agg(e ->> 'n', ',') from jsonb_array_elements(d.j -> 'c') as e) as n from d order by id`))
+                .toEqual([{ id: 1, n: 'A,B' }, { id: 2, n: 'C' }]);
+            expect(many(`select id from d where exists (select 1 from jsonb_array_elements(d.j -> 'c') as e where e ->> 'n' = 'C')`)).toEqual([{ id: 2 }]);
+        });
+        it('UPDATE and DELETE accept a table alias, in the statement and its subqueries', () => {
+            none(`update d tc set k = (select string_agg(e ->> 'n', ',' order by ord) from jsonb_array_elements(tc.j -> 'c') with ordinality as a(e, ord)) where tc.id = 1`);
+            expect(many(`select k from d order by id`)).toEqual([{ k: 'A,B' }, { k: null }]);
+            none(`delete from d x where x.k is null`);
+            expect(many(`select id from d`)).toEqual([{ id: 1 }]);
+        });
+        it('an aggregate in a select-list subquery does not aggregate the outer query', () => {
+            none(`create table c (p int); insert into c values (1), (1), (2)`);
+            expect(many(`select id, (select count(*) from c where c.p = d.id) as n from d order by id`)).toEqual([{ id: 1, n: 2 }, { id: 2, n: 1 }]);
+            expect(many(`select count(*) as n, (select count(*) from c) as m from d`)).toEqual([{ n: 2, m: 3 }]);
+        });
+    });
+
+    describe('INSERT … VALUES row length', () => {
+        // a production seed had a row with one value too many; postgres names that, per row
+        it('checks each row against the target columns first', () => {
+            none(`create table t (a int, b int, c int default 3)`);
+            expectQueryError(() => none(`insert into t (a, b) values (1, 2), (1, 2, 3)`), /INSERT has more expressions than target columns/);
+            expectQueryError(() => none(`insert into t (a, b) values (1, 2), (1)`), /INSERT has more target columns than expressions/);
+            expectQueryError(() => none(`insert into t values (1), (1, 2)`), /VALUES lists must all be the same length/);
+            none(`insert into t values (1, 2)`);
+        });
+    });
+
     describe('CREATE OR REPLACE TRIGGER', () => {
         it('replaces an existing trigger', () => {
             none(`create table o (id int, n int);

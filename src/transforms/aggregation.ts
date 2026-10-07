@@ -6,6 +6,7 @@ import { Types } from '../datatypes';
 import { nil, NotSupported } from '../interfaces';
 import hash from 'object-hash';
 import { Evaluator } from '../evaluator';
+import { buildSortKeys, compareRows, SortKey } from './order-by';
 import { buildCount } from './aggregations/count';
 import { buildMinMax } from './aggregations/max-min';
 import { buildSum } from './aggregations/sum';
@@ -75,6 +76,8 @@ interface AggregationInstance {
     distinct: IValue[] | nil;
     /** optional `FILTER (WHERE ...)` predicate: rows where it is not true are skipped */
     filter: IValue | nil;
+    /** `agg(x ORDER BY ...)`: rows are fed in this order */
+    orderBy: SortKey[] | nil;
 }
 
 function isIntegralType(value: any): boolean {
@@ -229,6 +232,8 @@ export class Aggregation extends TransformBase implements _ISelection, _IAggrega
                 computer: AggregationGroupComputer;
                 distinctHash: Set<any>;
                 instance: AggregationInstance,
+                /** rows held back for an aggregate with ORDER BY */
+                ordered?: Row[];
             }[];
         }>();
 
@@ -278,7 +283,23 @@ export class Aggregation extends TransformBase implements _ISelection, _IAggrega
                     }
                     g.distinctHash.add(valuesHash);
                 }
+                if (g.instance.orderBy) {
+                    // fed once the group is complete, in ORDER BY order
+                    (g.ordered ??= []).push(item);
+                    continue;
+                }
                 g.computer.feedItem(item);
+            }
+        }
+        for (const group of groups.values()) {
+            for (const g of group.aggs) {
+                if (g.ordered && g.computer) {
+                    g.ordered.sort(compareRows(g.instance.orderBy!, t));
+                    for (const item of g.ordered) {
+                        g.computer.feedItem(item);
+                    }
+                    g.ordered = undefined;
+                }
             }
         }
 
@@ -372,6 +393,8 @@ export class Aggregation extends TransformBase implements _ISelection, _IAggrega
         const filter = call.filter
             ? buildValue(call.filter).cast(Types.bool)
             : null;
+        // jsonb_agg(x ORDER BY y), string_agg(s, ',' ORDER BY s), ...
+        const orderBy = call.orderBy?.length ? buildSortKeys(call.orderBy) : null;
 
         this.aggregations.set(hashed, {
             id,
@@ -379,6 +402,7 @@ export class Aggregation extends TransformBase implements _ISelection, _IAggrega
             computer: got,
             distinct,
             filter,
+            orderBy,
         });
         return getter;
     }

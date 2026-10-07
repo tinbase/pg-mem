@@ -7,10 +7,17 @@ import hash from 'object-hash';
 import { parseArrayLiteral, QName } from 'pgsql-ast-parser';
 import { asSingleQName, nullIsh, qnameToStr } from '../utils';
 import { buildCtx } from './context';
-import { markSetReturning } from '../transforms/expand-srf';
+import { markSetReturning, isSetReturning } from '../transforms/expand-srf';
 
 
 export function buildCall(name: string | QName, args: IValue[]): IValue {
+    // f(unnest(arr)): postgres calls f once per element and the result is itself set-returning
+    // (`select lower(unnest(emails))`). Applying f to the whole array instead resolved
+    // lower(text[]) to the range overload.
+    const srfAt = args.findIndex(a => isSetReturning(a) && a.type instanceof ArrayType);
+    if (srfAt >= 0) {
+        return buildCallPerElement(name, args, srfAt);
+    }
     let type: _IType | nil = null;
     let get: (...args: any[]) => any;
 
@@ -311,6 +318,30 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
     return setReturning ? markSetReturning(ret) : ret;
 }
 
+
+function buildCallPerElement(name: string | QName, args: IValue[], srfAt: number): IValue {
+    const srf = args[srfAt];
+    let current: any;
+    // stands for "the element being processed"; impure so it is never folded into a constant
+    const element = new Evaluator((srf.type as ArrayType).of, null, hash({ srfElement: srf.hash }), srf, () => current, { unpure: true });
+    const perElement = buildCall(name, args.map((a, i) => i === srfAt ? element : a));
+    const ret = new Evaluator(
+        perElement.type.asArray()
+        , null
+        , hash({ call: name, perElement: perElement.hash })
+        , args
+        , (raw, t) => {
+            const arr = srf.get(raw, t);
+            if (nullIsh(arr)) {
+                return null;
+            }
+            return (arr as any[]).map(x => {
+                current = x;
+                return perElement.get(raw, t);
+            });
+        }, { unpure: true });
+    return markSetReturning(ret);
+}
 
 function expectArgs(name: string | QName, args: IValue[], count: number | [number, number]) {
     const [min, max] = typeof count === 'number' ? [count, count] : count;

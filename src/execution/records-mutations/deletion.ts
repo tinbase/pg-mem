@@ -12,7 +12,7 @@ export class Deletion extends MutationDataSourceBase {
         const { schema } = buildCtx();
         const table = asTable(schema.getObject(ast.from));
         // row-level security: DELETE can only affect rows visible via DELETE policies
-        const mutatedSel = applyReadRls(table, table.selection, 'delete', statementReadsColumns(ast as any))
+        const mutatedSel = applyReadRls(table, ast.from.alias ? table.selection.setAlias(ast.from.alias) : table.selection, 'delete', statementReadsColumns(ast as any))
             .filter(ast.where);
 
         super(table, mutatedSel, ast);

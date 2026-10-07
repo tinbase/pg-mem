@@ -25,7 +25,12 @@ export class FunctionCallTable extends DataSourceBase {
     }
 
     enumerate(t: _Transaction): Iterable<any> {
-        const results = this.evaluator.get(null, t);
+        // nothing precedes this FROM item, so the arguments read no row: they are constants, or
+        // outer-query references in a correlated subquery (`from jsonb_array_elements(outer.col)`),
+        // which are bound per outer row before this runs - evaluated now, not as constants
+        const results = this.evaluator.isConstant
+            ? this.evaluator.get()
+            : this.evaluator.get({}, t);
         for (const result of results ?? []) {
             result[this.symbol] = true;
         }
@@ -50,10 +55,14 @@ export class FunctionCallTable extends DataSourceBase {
 
 
     explain(e: _Explainer): _SelectExplanation {
-        throw new Error('Method not implemented.');
+        return {
+            id: e.idFor(this),
+            _: 'table',
+            table: 'function call',
+        } as any;
     }
 
     stats(t: _Transaction): Stats | null {
-        throw new Error('Method not implemented.');
+        return null;
     }
 }

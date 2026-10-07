@@ -49,7 +49,14 @@ function hasAggreg(e: Expr) {
                 return;
             }
             visitor.super().call(expr);
-        }
+        },
+        // an aggregate inside a subquery aggregates the subquery, not this query:
+        // `select id, (select count(*) from c where c.p = p.id) from p` is one row per p
+        select: x => x,
+        union: x => x,
+        with: x => x,
+        withRecursive: x => x,
+        values: x => x,
     })).expr(e);
     return has
 }

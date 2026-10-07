@@ -258,6 +258,33 @@ function jsonbHasKey(doc: any, key: string): boolean {
 }
 
 function registerJsonOperators(schema: _ISchema) {
+    // ======= "json -> key" / "json ->> key" with a non-literal key (a column, a variable,
+    // an expression); a literal key is compiled as a member access instead, same semantics
+    for (const j of [Types.json, Types.jsonb]) {
+        for (const [key, pick] of [
+            [Types.text(), (doc: any, k: string) => doc && typeof doc === 'object' && !Array.isArray(doc) ? doc[k] : undefined],
+            [Types.integer, (doc: any, i: number) => Array.isArray(doc) ? doc[i < 0 ? doc.length + i : i] : undefined],
+        ] as const) {
+            schema.registerOperator({
+                operator: '->',
+                left: j,
+                right: key,
+                returns: j,
+                implementation: (doc: any, k: any) => (pick as any)(doc, k) ?? null,
+            });
+            schema.registerOperator({
+                operator: '->>',
+                left: j,
+                right: key,
+                returns: Types.text(),
+                implementation: (doc: any, k: any) => {
+                    const v = (pick as any)(doc, k);
+                    return v === undefined || v === null ? null : typeof v === 'string' ? v : JSON.stringify(v);
+                },
+            });
+        }
+    }
+
     // ======= "jsonb ? text" / "?|" (any) / "?&" (all) key existence
     schema.registerOperator({
         operator: '?',

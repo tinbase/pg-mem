@@ -13,7 +13,7 @@ import { RecordType } from '../../datatypes/t-record';
 let execId = 0;
 
 export function registerSqlFunctionLanguage(db: _IDb) {
-    db.registerLanguage('sql', ({ code, schema: _schema, args, returns: _returns }) => {
+    db.registerLanguage('sql', ({ code, schema: _schema, args, returns: _returns, setof }) => {
         const schema = _schema as _ISchema;
         const returns = _returns as _IType;
         // parse SQL
@@ -69,6 +69,14 @@ export function registerSqlFunctionLanguage(db: _IDb) {
             transformResult = (v, t, eid) => v?.map(x => {
                 return transformItem(x, t, eid);
             });
+        } else if (setof && ArrayType.matches(returns)) {
+            // RETURNS SETOF <scalar>: one value per row
+            const cols = executor.selection.columns;
+            if (cols.length !== 1 || !cols[0].type.canConvertImplicit(returns.of)) {
+                throw new QueryError(`return type mismatch in function declared to return ${returns.of.name}`, '42P13');
+            }
+            const col = cols[0].cast(returns.of);
+            transformResult = (v, t) => (v ?? []).map(x => col.get(x, t));
         } else {
             // returns a single value
             const cols = executor.selection.columns;
