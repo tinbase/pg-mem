@@ -13,9 +13,6 @@ export class Comment extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         const on = this.p.on;
         switch (on.type) {

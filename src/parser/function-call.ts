@@ -1,5 +1,5 @@
 import { IValue, _IType, _ISelection, _ISchema, _IDb, _Transaction } from '../interfaces-private';
-import { Types, ArrayType } from '../datatypes';
+import { Types, ArrayType, crossesTypeCategory } from '../datatypes';
 import { toJsonValue } from '../datatypes/json-numbers';
 import { QueryError, NotSupported, nil, DataType } from '../interfaces';
 import { Evaluator } from '../evaluator';
@@ -264,6 +264,12 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
                 }
                 throw new QueryError(`COALESCE types ${a.name} and ${b.type.name} cannot be matched`, '42804');
             }, args[0].type);
+            for (const x of args) {
+                // a typed argument from another category cannot be matched (COALESCE(uuid_col, text_col))
+                if (!(x.isConstantLiteral && x.type.primary === DataType.text) && crossesTypeCategory(x.type, type)) {
+                    throw new QueryError(`COALESCE types ${type.name} and ${x.type.name} cannot be matched`, '42804');
+                }
+            }
             args = args.map(x => x.cast(type!));
             get = (...args: any[]) => args.find(x => !nullIsh(x));
             break;

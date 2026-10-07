@@ -72,6 +72,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             throw new QueryError(`policy "${policy.name}" for table "${this.name}" already exists`, '42710');
         }
         this.rls.policies.push(policy);
+        this.db.onSchemaChange();
     }
 
     dropPolicy(name: string, ifExists: boolean): void {
@@ -83,6 +84,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             throw new QueryError(`policy "${name}" for table "${this.name}" does not exist`, '42704');
         }
         this.rls.policies.splice(idx, 1);
+        this.db.onSchemaChange();
     }
 
     setRowLevelSecurity(action: 'enable' | 'disable' | 'force' | 'no force'): void {
@@ -92,6 +94,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             case 'force': this.rls.forced = true; break;
             case 'no force': this.rls.forced = false; break;
         }
+        this.db.onSchemaChange();
     }
 
     readonly triggers: TableTriggers = emptyTriggers();
@@ -239,6 +242,8 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
                 type: this.ownerSchema.getType(column.dataType),
             };
             delete (tp as any as Optional<CreateColumnDef>).dataType;
+            // keep the type as written, for information_schema (see ColRef.declaredType)
+            (tp as any).declaredType = column.dataType;
             return this.addColumn(tp, t);
         }
 
@@ -439,7 +444,8 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
                     const key = index.buildKey(toInsert, t);
                     const found = index.eqFirst(key, t);
                     if (found) {
-                        return found; // ignore.
+                        // skipped, like the untargeted form: RETURNING yields nothing for it
+                        return null;
                     }
                 }
             } else {
@@ -635,10 +641,28 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             ?? (this.name + '_constraint_' + (++this.cstGen));
     }
 
+    /**
+     * Postgres' name for an unnamed constraint/index: <table>_<col1>_<col2>…_<suffix>, then
+     * <base>1, <base>2… until free. Migrations rely on it: `alter table t drop constraint if
+     * exists t_status_check` before re-adding a widened check is how enums get extended.
+     */
+    autoRelName(columns: string[], suffix: string, taken: (name: string) => boolean): string {
+        const base = [this.name, ...columns, suffix].join('_');
+        let name = base;
+        for (let i = 1; taken(name); i++) {
+            name = base + i;
+        }
+        return name;
+    }
+
     addCheck(_t: _Transaction, check: Expr, constraintName?: string): _IConstraint {
-        constraintName = this.constraintNameGen(constraintName);
-        this.checkNoConstraint(constraintName);
         const getter = withSelection(this.selection, () => buildValue(check).cast(Types.bool));
+        if (!constraintName) {
+            // one referenced column: <table>_<col>_check; several: <table>_check
+            const cols = [...new Set([...getter.usedColumns].map(c => c.id!))];
+            constraintName = this.autoRelName(cols.length === 1 ? cols : [], 'check', n => this.constraintsByName.has(n) || !!this.ownerSchema.getOwnObject(n));
+        }
+        this.checkNoConstraint(constraintName);
 
         const checkVal = (t: _Transaction, v: any) => {
             const value = getter.get(v, t);
@@ -682,6 +706,10 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
                     value: getter,
                 });
             }
+            if (!_indexName && _type === 'unique') {
+                // a UNIQUE constraint (not a CREATE UNIQUE INDEX) is <table>_<cols>_key
+                _indexName = this.autoRelName(expressions.map(e => e.name), 'key', n => this.constraintsByName.has(n) || !!this.ownerSchema.getOwnObject(n));
+            }
             return this.createIndex(t, {
                 columns: keys,
                 primary: _type === 'primary',
@@ -706,7 +734,9 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
 
         const ihash = indexHash(expressions.columns.map(x => x.value));
 
-        const indexName = this.determineIndexRelName(expressions.indexName, ihash, expressions.ifNotExists, 'idx');
+        // an unnamed index is <table>_<col…>_idx; an expression contributes its function name (lower(x) -> lower), else "expr"
+        const nameParts = expressions.columns.map(c => c.value.id ?? 'expr');
+        const indexName = this.determineIndexRelName(expressions.indexName, nameParts, expressions.ifNotExists, 'idx');
         if (!indexName) {
             return null;
         }
@@ -747,7 +777,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         return ret;
     }
 
-    private determineIndexRelName(indexName: string | nil, ihash: string, ifNotExists: boolean | nil, sufix: string): string | nil {
+    private determineIndexRelName(indexName: string | nil, nameParts: string[], ifNotExists: boolean | nil, sufix: string): string | nil {
         if (indexName) {
             if (this.ownerSchema.getOwnObject(indexName)) {
                 if (ifNotExists) {
@@ -757,12 +787,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
             }
             return indexName;
         } else {
-            const baseName = indexName = `${this.name}_${ihash}_${sufix}`;
-            let i = 1;
-            while (this.ownerSchema.getOwnObject(indexName)) {
-                indexName = baseName + (i++);
-            }
-            return indexName!;
+            return this.autoRelName(nameParts, sufix, n => !!this.ownerSchema.getOwnObject(n) || this.constraintsByName.has(n));
         }
     }
 
@@ -860,7 +885,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         const ihash = indexHash(cst.localColumns.map(x => x.name));
         let constraintName: string | nil;
         if (cst.constraintName?.name) {
-            constraintName = this.determineIndexRelName(cst.constraintName.name, ihash, false, 'fk');
+            constraintName = this.determineIndexRelName(cst.constraintName.name, [], false, 'fk');
         } else {
             // Postgres convention for an unnamed FK: <table>_<col1>_<col2>..._fkey
             // (a numeric suffix is appended on collision, like Postgres)
@@ -876,7 +901,33 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         }
         const ret = new ForeignKey(constraintName)
             .install(t, cst, this);
+        const name = constraintName;
+        ret.onUninstalled = () => this.constraintsByName.delete(name);
         return new ConstraintWrapper(this.constraintsByName, ret);
+    }
+
+    /**
+     * Foreign keys on any table, this one included, that reference this table - narrowed to the
+     * ones through `viaColumns` when given. Postgres refuses to DROP the table or a referenced
+     * column out from under them ("other objects depend on it") unless CASCADE.
+     */
+    referencingForeignKeys(viaColumns?: string[]): ForeignKey[] {
+        const out: ForeignKey[] = [];
+        for (const schema of this.ownerSchema.db.listSchemas()) {
+            for (const tbl of schema.listTables()) {
+                for (const c of tbl.listConstraints?.() ?? []) {
+                    const fk = ((c as any).wrapped ?? c) as ForeignKey;
+                    if (fk.constraintKind !== 'foreign key' || fk.referencedTable !== this) {
+                        continue;
+                    }
+                    if (viaColumns && !fk.foreignColumns.some(fc => viaColumns.includes(fc))) {
+                        continue;
+                    }
+                    out.push(fk);
+                }
+            }
+        }
+        return out;
     }
 
     getConstraint(constraint: string): _IConstraint | nil {
@@ -965,6 +1016,8 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         for (const map of this.indexByHashAndName.values()) {
             for (const i of map.values()) {
                 i.index.dropFromData(t);
+                // free the index's name too, or re-creating the table hits "<t>_pkey already exists"
+                this.ownerSchema._reg_unregister(i.index);
             }
         }
         // todo should also check foreign keys, cascade, ...

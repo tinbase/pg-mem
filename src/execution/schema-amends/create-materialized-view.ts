@@ -33,15 +33,8 @@ export class CreateMaterializedView extends ExecHelper implements _IStatementExe
             return this.noData(t, 'CREATE');
         }
 
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
-
         // view creation
         this.toRegister.register();
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

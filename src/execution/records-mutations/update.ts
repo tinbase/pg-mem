@@ -1,5 +1,5 @@
 import { _ITable, _Transaction, _Explainer, _ISchema, asTable, _ISelection, _IIndex, _IStatement } from '../../interfaces-private';
-import { applyReadRls, checkWriteRls } from '../rls-enforce';
+import { applyReadRls, checkWriteRls, statementReadsColumns } from '../rls-enforce';
 import { fireRowTriggers, fireStatementTriggers, SKIP_ROW } from '../triggers';
 import { UpdateStatement } from 'pgsql-ast-parser';
 import { MutationDataSourceBase, Setter, createSetter } from './mutation-base';
@@ -63,7 +63,7 @@ export class Update extends MutationDataSourceBase {
 
             //  => REGULAR UPDATE
             // row-level security: UPDATE can only affect rows visible via UPDATE policies
-            mutatedSel = applyReadRls(into, into.selection, 'update')
+            mutatedSel = applyReadRls(into, into.selection, 'update', statementReadsColumns(ast as any))
                 .filter(ast.where);
         }
 

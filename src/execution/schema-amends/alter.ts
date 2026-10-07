@@ -2,6 +2,7 @@ import { _ISchema, _Transaction, SchemaField, NotSupported, _ITable, _IStatement
 import { AlterTableStatement } from 'pgsql-ast-parser';
 import { ignore } from '../../utils';
 import { ExecHelper } from '../exec-utils';
+import { policiesDependingOn } from '../policy-deps';
 
 export class Alter extends ExecHelper implements _IStatementExecutor {
 
@@ -16,10 +17,6 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
     execute(t: _Transaction) {
 
         let ignored = 0;
-
-        // commit pending data before making changes
-        //  (because  does not support further rollbacks)
-        t = t.fullCommit();
 
 
         for (const change of this.p.changes) {
@@ -51,6 +48,29 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
                     if (!col) {
                         ignoreChange();
                     } else {
+                        // a foreign key into this column, or a policy reading it, depends on it:
+                        // postgres refuses unless CASCADE, which drops those dependents too
+                        const name = change.column.name;
+                        const fks = this.table.referencingForeignKeys?.([name]) ?? [];
+                        const policies = policiesDependingOn(this.table, name);
+                        if (change.behaviour === 'cascade') {
+                            for (const fk of fks) {
+                                fk.uninstall(t);
+                            }
+                            for (const p of policies) {
+                                p.table.dropPolicy(p.policy, true);
+                            }
+                        } else if (fks.length || policies.length) {
+                            throw new QueryError({
+                                error: `cannot drop column ${name} of table ${this.table.name} because other objects depend on it`,
+                                details: [
+                                    ...fks.map(fk => `constraint ${fk.name} on table ${fk.tableName} depends on column ${name} of table ${this.table.name}`),
+                                    ...policies.map(p => `policy ${p.policy} on table ${p.table.name} depends on column ${name} of table ${this.table.name}`),
+                                ].join('\n'),
+                                hint: 'Use DROP ... CASCADE to drop the dependent objects too.',
+                                code: '2BP01',
+                            });
+                        }
                         col.drop(t);
                     }
                     break;
@@ -91,10 +111,6 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
 
             }
         }
-
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'ALTER');
     }
 }

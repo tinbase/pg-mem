@@ -1,6 +1,7 @@
 import { _ITable, _ISelection, IValue, _IIndex, _IDb, IndexKey, setId, _Transaction, _ISchema } from '../../interfaces-private';
 import { Schema, nil } from '../../interfaces';
-import { toSql } from 'pgsql-ast-parser';
+import { toSql, DataTypeDef } from 'pgsql-ast-parser';
+import { DataType } from '../../interfaces';
 import { Types } from '../../datatypes';
 import { TableIndex } from '../table-index';
 import { ReadOnlyTable } from '../readonly-table';
@@ -12,10 +13,55 @@ const IS_SCHEMA = Symbol('_is_colmun');
  * Only real tables carry ColRefs; views and function-call tables expose values without column
  * definitions, so callers must tolerate nil rather than assume a table.
  */
+const BUILTIN = new Set<string>(Object.values(DataType));
+
+/** Postgres' internal (pg_type) name for a type, as udt_name reports it. */
+function udtName(type: IValue['type'], declared: DataTypeDef | nil): string {
+    const n = (declared as any)?.name?.toLowerCase() as string | undefined;
+    switch (type.primary) {
+        case DataType.integer: return n === 'smallint' || n === 'int2' || n === 'smallserial' ? 'int2' : 'int4';
+        case DataType.bigint: return 'int8';
+        case DataType.float: return n === 'real' || n === 'float4' ? 'float4' : 'float8';
+        case DataType.decimal: return 'numeric';
+        case DataType.text:
+            if (n === 'char' || n === 'character' || n === 'bpchar') return 'bpchar';
+            return (type as any).len || n === 'varchar' || n === 'character varying' ? 'varchar' : 'text';
+        case DataType.array:
+            return '_' + udtName((type as any).of, declared?.kind === 'array' ? declared.arrayOf : null);
+    }
+    // built-ins are named by their primary (timestamptz, not 'timestamp with time zone'); enums/domains by name
+    return BUILTIN.has(type.primary) ? type.primary : (type as any).name ?? type.primary;
+}
+
+/** information_schema.columns.data_type: the SQL-standard name, 'ARRAY', or 'USER-DEFINED'. */
+function sqlTypeName(type: IValue['type'], declared: DataTypeDef | nil): string {
+    if (type.primary === DataType.array) {
+        return 'ARRAY';
+    }
+    if (type.primary === DataType.citext || !BUILTIN.has(type.primary)) {
+        return 'USER-DEFINED';
+    }
+    switch (udtName(type, declared)) {
+        case 'int2': return 'smallint';
+        case 'int4': return 'integer';
+        case 'int8': return 'bigint';
+        case 'float4': return 'real';
+        case 'float8': return 'double precision';
+        case 'bool': return 'boolean';
+        case 'bpchar': return 'character';
+        case 'varchar': return 'character varying';
+        case 'timestamptz': return 'timestamp with time zone';
+        case 'timestamp': return 'timestamp without time zone';
+        case 'timetz': return 'time with time zone';
+        case 'time': return 'time without time zone';
+    }
+    return udtName(type, declared);
+}
+
 function columnRef(
     table: _ITable,
     columnName: string | nil
-): { notNull?: boolean; default?: IValue | nil } | nil {
+): { notNull?: boolean; default?: IValue | nil; declaredType?: DataTypeDef | nil } | nil {
     if (!columnName) {
         return null;
     }
@@ -45,6 +91,10 @@ function defaultExpressionOf(table: _ITable, columnName: string | nil): string |
     if (!ast) {
         return null;
     }
+    const pg = pgExprText(ast);
+    if (pg !== null) {
+        return pg;
+    }
     try {
         // toSql renders defensively — `now()` comes out as `(now () )`. Postgres reports `now()`, and
         // consumers compare these strings, so collapse the padding and drop one layer of wrapping
@@ -62,6 +112,71 @@ function defaultExpressionOf(table: _ITable, columnName: string | nil): string |
     } catch {
         return null;
     }
+}
+
+const pgQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
+const KEYWORD_TEXT: Record<string, string> = {
+    current_date: 'CURRENT_DATE', current_timestamp: 'CURRENT_TIMESTAMP', localtimestamp: 'LOCALTIMESTAMP',
+    current_time: 'CURRENT_TIME', localtime: 'LOCALTIME', current_user: 'CURRENT_USER', current_role: 'CURRENT_ROLE',
+    session_user: 'SESSION_USER', user: 'CURRENT_USER',
+};
+
+/**
+ * A default expression as postgres' pg_get_expr prints it: literals as written (0.30, not 0.3),
+ * negative numbers quoted ('-1'::integer), a binary expression wrapped once - (now() + '2 days'::interval)
+ * - with bare operands, ARRAY[...], CURRENT_DATE. Null for shapes it does not know, which then go
+ * through the generic toSql rendering.
+ */
+function pgExprText(e: any): string | null {
+    const operand = (x: any) => pgExprText(x);
+    switch (e?.type) {
+        case 'string':
+            return pgQuote(e.value);
+        case 'integer':
+            // negative, or too big for int4 (then typed bigint): postgres prints it quoted
+            return e.value < 0 || e.value > 2147483647 ? pgQuote(String(e.valueText ?? e.value)) : String(e.valueText ?? e.value);
+        case 'numeric': {
+            const txt = e.raw ?? e.valueText ?? String(e.value);
+            return txt.startsWith('-') ? pgQuote(txt) : txt;
+        }
+        case 'boolean':
+            return e.value ? 'true' : 'false';
+        case 'null':
+            return 'NULL';
+        case 'keyword':
+            return KEYWORD_TEXT[e.keyword] ?? null;
+        case 'call': {
+            const args = (e.args ?? []).map(operand);
+            if (args.some((a: string | null) => a === null) || e.distinct || e.orderBy || e.filter || e.over) {
+                return null;
+            }
+            const fn = (e.function.schema ? e.function.schema + '.' : '') + e.function.name;
+            return `${fn}(${args.join(', ')})`;
+        }
+        case 'cast': {
+            const inner = operand(e.operand);
+            return inner === null ? null : `${inner}::${toSql.dataType(e.to as any)}`;
+        }
+        case 'binary': {
+            const l = operand(e.left), r = operand(e.right);
+            return l === null || r === null ? null : `(${l} ${e.op} ${r})`;
+        }
+        case 'unary': {
+            const v = operand(e.operand);
+            if (v === null) {
+                return null;
+            }
+            if (e.op === '-' && /^[\d.]+$/.test(v)) {
+                return pgQuote('-' + v);
+            }
+            return e.op === 'NOT' ? `(NOT ${v})` : `(${e.op}${v})`;
+        }
+        case 'array': {
+            const items = (e.expressions ?? []).map(operand);
+            return items.some((a: string | null) => a === null) ? null : `ARRAY[${items.join(', ')}]`;
+        }
+    }
+    return null;
 }
 
 /** Remove one paren pair only when it wraps the entire expression. */
@@ -179,14 +294,15 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
             // column refs (views, function-call tables) still fall back to the permissive answer.
             is_nullable: columnRef(table, t.id)?.notNull ? 'NO' : 'YES',
             column_default: defaultExpressionOf(table, t.id),
-            data_type: t.type.primary, // <== todo
+            data_type: sqlTypeName(t.type, columnRef(table, t.id)?.declaredType),
+            character_maximum_length: (t.type as any).len ?? (udtName(t.type, columnRef(table, t.id)?.declaredType) === 'bpchar' ? 1 : null),
             numeric_precision: null, // <== todo
             numeric_precision_radix: null, // <== todo
             numeric_scale: null, // <== todo
 
             udt_catalog: 'pgmem',
             udt_schema: 'pg_catalog',
-            udt_name: t.type.primary, // <== todo
+            udt_name: udtName(t.type, columnRef(table, t.id)?.declaredType),
 
             dtd_identifier: i, // <== todo
 
@@ -209,7 +325,7 @@ export class ColumnsListSchema extends ReadOnlyTable implements _ITable {
     }
 
     getIndex(forValue: IValue): _IIndex | nil {
-        if (forValue.id === 'table_name') {
+        if (forValue?.id === 'table_name') {
             return new TableIndex(this, forValue);
         }
         return null;

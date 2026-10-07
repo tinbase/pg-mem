@@ -1,5 +1,5 @@
 import { _ITable, _Transaction, IValue, _Explainer, nil, _ISchema, asTable, _ISelection, _IIndex, QueryError, OnConflictHandler, ChangeOpts, _IStatement, NotSupported } from '../../interfaces-private';
-import { checkWriteRls } from '../rls-enforce';
+import { checkWriteRls, checkConflictUpdateRls } from '../rls-enforce';
 import { fireRowTriggers, fireStatementTriggers, SKIP_ROW } from '../triggers';
 import { InsertStatement } from 'pgsql-ast-parser';
 import { buildValue } from '../../parser/expression-builder';
@@ -117,6 +117,9 @@ export class Insert extends MutationDataSourceBase {
                 ignoreConflicts = {
                     onIndex,
                     update: (item, excluded, t) => {
+                        // row-level security: the conflicting row must be one this role may update
+                        checkConflictUpdateRls(this.table, item, t);
+
                         // build setter context
                         const jitem = subject.buildItem(item, excluded);
 
@@ -130,6 +133,9 @@ export class Insert extends MutationDataSourceBase {
 
                         // execute set
                         setter(t, item, jitem);
+
+                        // ... and the updated row must satisfy UPDATE WITH CHECK
+                        checkWriteRls(this.table, 'update', item, t);
                     },
                 }
             }

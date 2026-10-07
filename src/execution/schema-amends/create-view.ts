@@ -18,6 +18,9 @@ export class CreateView extends ExecHelper implements _IStatementExecutor {
         // check existence
         this.existing = asView(this.schema.getObject(p.name, { nullIfNotFound: true }));
         ignore(p.orReplace);
+        // WITH (security_invoker = true, security_barrier, ...): accepted; pg-mem evaluates a view's
+        // query in the caller's context, which is what security_invoker asks for
+        ignore(p.parameters);
         this.drop = !!(p.orReplace && this.existing);
 
         let view = buildSelect(p.query);
@@ -43,9 +46,6 @@ export class CreateView extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         // drop if needed
         if (this.existing && this.drop) {
@@ -54,9 +54,6 @@ export class CreateView extends ExecHelper implements _IStatementExecutor {
 
         // view creation
         this.toRegister.register();
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

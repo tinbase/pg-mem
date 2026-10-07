@@ -3,13 +3,16 @@ import { CreateFunctionStatement } from 'pgsql-ast-parser';
 import { ExecHelper } from '../exec-utils';
 import { buildValue } from '../../parser/expression-builder';
 import { Types } from '../../datatypes';
-import { ignore, deepEqual } from '../../utils';
+import { ignore, deepEqual, executionCtx } from '../../utils';
+import { runAsRole, currentRoleName, DEFAULT_ROLE_NAME } from '../roles';
+import { getTriggerRunner } from '../plpgsql';
 import { withSelection } from '../../parser/context';
 
 export class CreateFunction extends ExecHelper implements _IStatementExecutor {
     private onSchema: _ISchema;
     private toRegister: FunctionDefinition;
     private replace: boolean;
+    private owner: string = DEFAULT_ROLE_NAME;
 
     constructor({ schema }: _IStatement, fn: CreateFunctionStatement) {
         super(fn);
@@ -20,9 +23,12 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
 
         const lang = schema.db.getLanguage(fn.language.name);
 
-        // SECURITY DEFINER/INVOKER is a privilege concept; pg-mem has no roles, so
-        // the body simply runs with the caller's (only) rights either way.
+        // SECURITY DEFINER: the body runs as the function's owner (the role that created it),
+        // see the wrapping below; INVOKER (the default) runs as the caller
         ignore(fn.security);
+        // SET search_path = ... / COST / ROWS / PARALLEL: accepted, no effect here (pg-mem resolves
+        // names without a per-function search_path, and has no planner costs or parallelism)
+        ignore(fn.settings, fn.cost, fn.rows, fn.parallel);
 
         // determine arg types
         const args = withSelection(schema.dualTable.selection, () => fn.arguments.map<_ArgDefDetails>(a => ({
@@ -92,10 +98,20 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
             schema: schema,
         });
 
+        let implementation = compiled;
+        if (fn.security === 'definer') {
+            const asOwner = (t: _Transaction, run: () => any) => runAsRole(t, this.owner, run);
+            implementation = (...a: any[]) => asOwner(executionCtx().transaction, () => compiled(...a));
+            const trigger = getTriggerRunner(compiled);
+            if (trigger) {
+                (implementation as any).__triggerRunner = (ctx: any, t: _Transaction) => asOwner(t, () => trigger(ctx, t));
+            }
+        }
+
         this.toRegister = {
             name: fn.name.name,
             returns,
-            implementation: compiled,
+            implementation,
             args: args.filter(x => x.mode !== 'variadic'),
             argsVariadic,
             impure: fn.purity !== 'immutable',
@@ -112,8 +128,10 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
                 throw new QueryError(`function ${this.toRegister.name} lready exists with same argument types`, '42723');
             }
 
-            //  ... it must be the same type
-            if (existing.returns !== returns) {
+            //  ... it must be the same type ("returns trigger" builds a fresh placeholder record
+            //  type each time, so two trigger functions compare by that, not by identity)
+            const bothTriggers = !!getTriggerRunner(existing.implementation) && isTrigger;
+            if (existing.returns !== returns && !bothTriggers && !sameReturnType(existing.returns, returns)) {
                 throw new QueryError(`cannot change return type of existing function`, '42P13');
             }
 
@@ -128,14 +146,19 @@ export class CreateFunction extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
+        // the creating role owns the function (what SECURITY DEFINER runs as)
+        this.owner = currentRoleName(t);
         this.onSchema.registerFunction(this.toRegister, this.replace);
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
+}
+
+/** same declared return type, compared structurally (types are not always interned) */
+function sameReturnType(a: _IType | nil, b: IType | nil): boolean {
+    if (!a || !b) {
+        return a === b;
+    }
+    const x = a as any, y = b as any;
+    return x.primary === y.primary && x.name === y.name && (x.of?.name ?? null) === (y.of?.name ?? null);
 }

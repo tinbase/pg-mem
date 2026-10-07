@@ -20,17 +20,11 @@ export class CreateSchema extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because does not support further rollbacks)
-        t = t.fullCommit();
 
         // create schema
         if (this.toCreate) {
             this.st.schema.db.createSchema(this.toCreate);
         }
-
-        // new implicit transaction
-        t = t.fork();
         return this.noData(t, 'CREATE');
     }
 }

@@ -128,8 +128,9 @@ export const stringFunctions: FunctionDefinition[] = [
         implementation: (x: string) => x?.toUpperCase(),
     },
     {
+        // concat(VARIADIC "any"): every argument, the first included, may be of any type
         name: 'concat',
-        args: [DataType.text],
+        args: [],
         argsVariadic: DataType.text,
         returns: DataType.text,
         allowNullArguments: true,

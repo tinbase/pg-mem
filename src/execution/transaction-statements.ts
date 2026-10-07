@@ -67,7 +67,7 @@ export class BeginStatementExec extends ExecHelper implements _IStatementExecuto
     }
 
     execute(t: _Transaction): StatementResult {
-        t = t.fork();
+        t = t.fork(true);
         return this.noData(t, 'BEGIN');
     }
 }

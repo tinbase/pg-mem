@@ -17,9 +17,6 @@ export class AlterEnum extends ExecHelper implements _IStatementExecutor {
     }
 
     execute(t: _Transaction) {
-        // commit pending data before making changes
-        //  (because the index sequence creation does support further rollbacks)
-        t = t.fullCommit();
         const enumValues = this.originalEnum.values
 
         switch (this.p.change.type) {
@@ -31,9 +28,6 @@ export class AlterEnum extends ExecHelper implements _IStatementExecutor {
                 this.onSchema.registerEnum(this.p.change.to.name, enumValues)
                 break;
         }
-
-        // new implicit transaction
-        t = t.fork();
 
         return this.noData(t, 'ALTER');
     }

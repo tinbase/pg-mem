@@ -65,6 +65,7 @@ export class View extends FilterBase implements _IView {
     }
 
     drop(t: _Transaction): void {
-        throw new Error('Method not implemented.');
+        this.ownerSchema._reg_unregister(this);
+        this.db.onSchemaChange();
     }
 }

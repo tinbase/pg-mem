@@ -1,6 +1,6 @@
 import { ISchema, DataType, IType, RelationNotFound, Schema, QueryResult, SchemaField, nil, FunctionDefinition, PermissionDeniedError, TypeNotFound, ArgDefDetails, IEquivalentType, QueryInterceptor, ISubscription, QueryError, typeDefToStr, OperatorDefinition, QueryOrAst, IPreparedQuery } from '../interfaces';
 import { _IDb, _ISelection, _ISchema, _Transaction, _ITable, _SelectExplanation, _Explainer, IValue, _IIndex, _IType, _IRelation, QueryObjOpts, _ISequence, _INamedIndex, RegClass, Reg, TypeQuery, asType, _ArgDefDetails, BeingCreated, _FunctionDefinition, _OperatorDefinition } from '../interfaces-private';
-import { asSingleQName, ignore, isType, notNil, parseRegClass, randomString, schemaOf } from '../utils';
+import { asSingleQName, ignore, isType, notNil, parseRegClass, randomString, schemaOf, hasExecutionCtx } from '../utils';
 import { typeSynonyms, Types } from '../datatypes';
 import { DropFunctionStatement, BinaryOperator, QName, DataTypeDef, CreateSequenceOptions, CreateExtensionStatement, Statement } from 'pgsql-ast-parser';
 import { MemoryTable } from '../table';
@@ -100,6 +100,12 @@ export class DbSchema implements _ISchema, ISchema {
             return ret;
         } catch (e) {
             this.db.raiseGlobal('query-failed', query);
+            // a top-level statement that fails to compile (unknown column, uuid = text, ...) inside a
+            // BEGIN block aborts it, like one failing at run time: COMMIT then rolls back
+            const open = this.db.sessionTx;
+            if (open?.inExplicitBlock && !hasExecutionCtx()) {
+                open.aborted = true;
+            }
             throw e;
         }
     }
@@ -393,10 +399,14 @@ export class DbSchema implements _ISchema, ISchema {
 
 
 
-    declareTable(table: Schema, noSchemaChange?: boolean): MemoryTable {
-        const trans = this.db.data.fork();
+    declareTable(table: Schema, noSchemaChange?: boolean, inTransaction?: _Transaction): MemoryTable {
+        // CREATE TABLE builds the table inside the statement's transaction (DDL is transactional);
+        // the JS API (db.public.declareTable) has none, so it commits on its own
+        const trans = inTransaction ?? this.db.data.fork();
         const ret = new MemoryTable(this, trans, table).register();
-        trans.commit();
+        if (!inTransaction) {
+            trans.commit();
+        }
         if (!noSchemaChange) {
             this.db.onSchemaChange();
         }

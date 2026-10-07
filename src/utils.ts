@@ -82,6 +82,12 @@ export function watchUse<T>(rootValue: T): { checked: T; check?: () => string | 
                 enumerable: true,
             });
         }
+        // non-enumerable metadata (e.g. a numeric literal's text as written) rides along unwatched
+        for (const k of Object.getOwnPropertyNames(value)) {
+            if (!Object.prototype.propertyIsEnumerable.call(value, k)) {
+                Object.defineProperty(ret, k, { value: value[k], enumerable: false });
+            }
+        }
         return ret;
     }
 
@@ -380,6 +386,11 @@ export function executionCtx(): ExecCtx {
     }
     return curCtx[curCtx.length - 1];
 }
+/** now() in postgres: the current transaction's start time (wall clock outside of any execution) */
+export function transactionNow(): Date {
+    return curCtx.length ? new Date(curCtx[curCtx.length - 1].transaction.startedAt.getTime()) : new Date();
+}
+
 export function hasExecutionCtx(): boolean {
     return curCtx.length > 0;
 }

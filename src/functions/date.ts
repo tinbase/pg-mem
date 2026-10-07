@@ -2,7 +2,7 @@ import { FunctionDefinition } from '../interfaces';
 import { utc, fromParts, startOf, parseFormat } from '../datatypes/date-utils';
 import { Interval } from 'pgsql-ast-parser';
 import { DataType, QueryError } from '../interfaces-private';
-import { nullIsh } from '../utils';
+import { nullIsh, transactionNow } from '../utils';
 import { dateToChar, intervalToChar, numberToChar } from './to-char';
 
 
@@ -22,8 +22,17 @@ export const dateFunctions: FunctionDefinition[] = [
             return ret;
         }
     },
+    // now() and transaction_timestamp() are the transaction's start time, constant for its whole
+    // lifetime (so a trigger's `new.updated_at = now()` equals the statement's now());
+    // clock_timestamp() is the wall clock
+    ...['now', 'transaction_timestamp', 'statement_timestamp'].map<FunctionDefinition>(name => ({
+        name,
+        returns: DataType.timestamptz,
+        impure: true,
+        implementation: () => transactionNow(),
+    })),
     {
-        name: 'now',
+        name: 'clock_timestamp',
         returns: DataType.timestamptz,
         impure: true,
         implementation: () => new Date(),

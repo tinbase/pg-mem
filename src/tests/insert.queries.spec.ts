@@ -229,8 +229,10 @@ describe('Inserts', () => {
     });
 
     it('ensures serials are transactional', () => {
-        expect(many(`create table test(id serial primary key, val text);
-                        insert into test(val) values ('x');
+        // the table is created in its own call: in one multi-statement call, ROLLBACK would undo
+        // the CREATE TABLE too (DDL is transactional, as in postgres)
+        none(`create table test(id serial primary key, val text)`);
+        expect(many(`insert into test(val) values ('x');
                         insert into test(val) values ('x');
                         insert into test(val) values ('x');
                         rollback;
@@ -331,7 +333,8 @@ describe('Inserts', () => {
 
         it('should allow string for bigint columns on insert', () => {
             none(`create table test(a bigint, b int8);`);
-            expect(many(`insert into test values ('123456','111') returning a`)).toEqual([{ a: 123456 }]);
+            // bigint is a digit string whichever way it was inserted (as node-postgres returns it)
+            expect(many(`insert into test values ('123456','111') returning a`)).toEqual([{ a: '123456' }]);
         })
 
         it('checks that insert values has enough columns', () => {

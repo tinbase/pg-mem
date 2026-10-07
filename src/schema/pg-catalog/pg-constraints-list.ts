@@ -81,7 +81,7 @@ export class PgConstraintTable extends ReadOnlyTable implements _ITable {
     }
 
     getIndex(forValue: IValue): _IIndex | nil {
-        if (forValue.id === 'table_name') {
+        if (forValue?.id === 'table_name') {
             return new TableIndex(this, forValue);
         }
         return null;

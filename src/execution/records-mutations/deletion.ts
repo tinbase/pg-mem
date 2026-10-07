@@ -1,5 +1,5 @@
 import { _ITable, _Transaction, IValue, _Explainer, _ISchema, asTable, _ISelection, _IIndex, _IStatement } from '../../interfaces-private';
-import { applyReadRls } from '../rls-enforce';
+import { applyReadRls, statementReadsColumns } from '../rls-enforce';
 import { fireRowTriggers, fireStatementTriggers, SKIP_ROW } from '../triggers';
 import { DeleteStatement } from 'pgsql-ast-parser';
 import { MutationDataSourceBase } from './mutation-base';
@@ -12,7 +12,7 @@ export class Deletion extends MutationDataSourceBase {
         const { schema } = buildCtx();
         const table = asTable(schema.getObject(ast.from));
         // row-level security: DELETE can only affect rows visible via DELETE policies
-        const mutatedSel = applyReadRls(table, table.selection, 'delete')
+        const mutatedSel = applyReadRls(table, table.selection, 'delete', statementReadsColumns(ast as any))
             .filter(ast.where);
 
         super(table, mutatedSel, ast);

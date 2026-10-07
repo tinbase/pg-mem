@@ -65,6 +65,33 @@ export function currentRole(t: _Transaction): Role {
     return getRole(t, currentRoleName(t)) ?? DEFAULT_ROLE;
 }
 
+/** GRANT … TO / CREATE POLICY … TO a role that does not exist fails in postgres ("role … does not exist"). */
+export function assertRolesExist(t: _Transaction, names: (string | undefined)[]): void {
+    for (const n of names) {
+        if (!n || n === 'public' || n === 'current_user' || n === 'session_user' || n === 'current_role') {
+            continue;
+        }
+        if (!getRole(t, n)) {
+            throw new QueryError(`role "${n}" does not exist`, '42704');
+        }
+    }
+}
+
+/**
+ * Run `fn` as `role` - a SECURITY DEFINER function's body runs with its owner's rights (so a
+ * helper like is_member(crew_id) can read a table whose policies would otherwise filter it,
+ * the standard way to avoid recursive RLS) - then restore the caller's role.
+ */
+export function runAsRole<T>(t: _Transaction, role: string, fn: () => T): T {
+    const prev = t.getMap(GLOBAL_VARS).get(CURRENT_ROLE_KEY) as string | undefined;
+    setGuc(t, CURRENT_ROLE_KEY, role);
+    try {
+        return fn();
+    } finally {
+        setGuc(t, CURRENT_ROLE_KEY, prev);
+    }
+}
+
 function setGuc(t: _Transaction, key: string, value: string | undefined): void {
     let g = t.getMap(GLOBAL_VARS);
     g = value === undefined ? g.delete(key) : g.set(key, value);

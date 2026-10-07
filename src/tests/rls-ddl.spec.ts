@@ -42,6 +42,8 @@ describe('RLS policy DDL & storage', () => {
     });
 
     it('captures AS / FOR / TO / WITH CHECK', () => {
+        // the grantees must exist, as in postgres ("role ... does not exist")
+        none(`create role alice; create role bob`);
         none(`create policy p2 on docs as restrictive for insert to alice, bob with check (owner = current_user)`);
         const p = rls().policies.find((x: any) => x.name === 'p2');
         expect(p.permissive).toBe(false);

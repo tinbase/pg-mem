@@ -27,6 +27,8 @@ function isSchemaChange(s: Statement): boolean {
         case 'drop index':
         case 'drop sequence':
         case 'drop table':
+        case 'drop view':
+        case 'drop materialized view':
         case 'drop trigger':
         case 'drop type':
             return true;
@@ -38,6 +40,66 @@ function isSchemaChange(s: Statement): boolean {
         default:
             return false;
     }
+}
+
+/**
+ * Where a top-level query call starts: the transaction block a previous call left open
+ * (BEGIN without COMMIT/ROLLBACK yet), or a fresh implicit transaction forked from root.
+ *
+ * Inside a block that a failed statement aborted, Postgres refuses everything but the
+ * statement that ends the block; COMMIT then rolls back, like it does in Postgres.
+ */
+function startCall(db: _IDb, statements: Statement[]): _Transaction {
+    const open = db.sessionTx;
+    db.sessionTx = null;
+    if (!open) {
+        return db.data.fork();
+    }
+    if (open.aborted) {
+        const first = statements[0]?.type;
+        if (first === 'rollback' && (statements[0] as any).to) {
+            // ROLLBACK TO SAVEPOINT is how a client recovers an aborted block without ending it
+            // (what drivers' nested transactions do after an error): rewind to the savepoint and
+            // carry on in the block. If the savepoint does not exist, that statement fails and the
+            // block stays aborted.
+            open.aborted = false;
+            return open;
+        }
+        if (first === 'rollback' || first === 'commit') {
+            // the block is over either way (a COMMIT on an aborted block is a ROLLBACK in
+            // postgres): undo it, schema included, and carry on in whatever enclosed it
+            statements.splice(0, 1);
+            const after = open.explicitBlock?.rollback() ?? db.data;
+            return after.isChild ? after : db.data.fork();
+        }
+        db.sessionTx = open;
+        throw new QueryError('current transaction is aborted, commands ignored until end of transaction block', '25P02');
+    }
+    return open;
+}
+
+/** End of a top-level call: commit, unless a BEGIN block is still open, in which case keep it for the next call. */
+function endCall(db: _IDb, state: _Transaction) {
+    if (state.inExplicitBlock) {
+        db.sessionTx = state;
+        return;
+    }
+    // run any deferred (DEFERRABLE INITIALLY DEFERRED) constraint checks before
+    // finalizing - a violation aborts the batch, so nothing persists to root
+    runDeferredChecks(state);
+    state.fullCommit();
+}
+
+/** A statement failed: if it ran inside a BEGIN block, the block is now aborted until ROLLBACK. */
+function failCall(db: _IDb, state: _Transaction) {
+    if (state.inExplicitBlock) {
+        state.aborted = true;
+        db.sessionTx = state;
+        return;
+    }
+    // the call's implicit transaction is dropped, so its data is gone: put the schema back too
+    // (a failed migration must not leave half its tables behind)
+    state.discardAll();
 }
 
 let _paramList: Parameter[] | null = null;
@@ -122,36 +184,48 @@ class PreparedQueryNoDescribe implements _IPreparedQuery {
     }
 
     bind(args: any[]): _IBoundQuery {
-        // Start an implicit transaction
-        let t = this.schema.db.data.fork();
+        const db = this.schema.db;
+        const query = [...this.query];
+        let t = startCall(db, query);
         const results: StatementResult[] = [];
-        for (const stmt of this.query) {
-            const s = new StatementExec(this.schema, stmt, this.singleSql);
+        try {
+            for (const stmt of query) {
+                const s = new StatementExec(this.schema, stmt, this.singleSql);
 
-            const compiled = s.compile();
+                const compiled = s.compile();
 
-            // store last select for debug purposes
-            if (compiled instanceof SelectExec) {
-                this.schema.lastSelect = compiled.selection;
+                // store last select for debug purposes
+                if (compiled instanceof SelectExec) {
+                    this.schema.lastSelect = compiled.selection;
+                }
+
+                // execute statement
+                const r = s.executeStatement(t, args);
+                r.result.rows = cleanResults(r.result.rows);
+                results.push(r);
+                t = r.state;
             }
-
-            // execute statement
-            const r = s.executeStatement(t, args);
-            r.result.rows = cleanResults(r.result.rows);
-            results.push(r);
-            t = r.state;
+        } catch (e) {
+            failCall(db, t);
+            throw e;
+        }
+        if (!results.length) {
+            // the call was only the ROLLBACK/COMMIT closing an aborted block
+            endCall(db, t);
+            return new NoDescribeBound(this, [{ result: { command: 'ROLLBACK', fields: [], rowCount: 0, rows: [], location: { start: 0, end: 0 } } as any, state: t }], true);
         }
         return new NoDescribeBound(this, results);
     }
 }
 
 class NoDescribeBound implements _IBoundQuery {
-    constructor(private parent: PreparedQueryNoDescribe, private results: StatementResult[]) {
+    constructor(private parent: PreparedQueryNoDescribe, private results: StatementResult[], private ended = false) {
     }
     executeAll(): QueryResult {
         const last = this.results[this.results.length - 1]!;
-        runDeferredChecks(last.state);
-        last.state.fullCommit();
+        if (!this.ended) {
+            endCall(this.parent.schema.db, last.state);
+        }
         this.parent.executed?.();
         return last.result;
     }
@@ -242,19 +316,42 @@ class Bound implements _IBoundQuery {
     }
 
     private *doExecute(outerTx?: _Transaction): IterableIterator<StatementResult> {
-        // Start an implicit transaction
-        //  (to avoid messing global data if an operation fails mid-write)
-        let t = outerTx ?? this.parent.schema.db.data.fork();
-
+        // Start an implicit transaction (to avoid messing global data if an operation fails
+        // mid-write), or resume the BEGIN block a previous call left open
+        const db = this.parent.schema.db;
+        let stmts = this.stmts;
+        let t: _Transaction;
+        if (outerTx) {
+            t = outerTx;
+        } else {
+            const asts = stmts.map(s => s.statement);
+            t = startCall(db, asts);
+            if (asts.length < stmts.length) {
+                // the leading ROLLBACK/COMMIT closed an aborted block
+                stmts = stmts.slice(stmts.length - asts.length);
+                if (!stmts.length) {
+                    yield { result: { command: 'ROLLBACK', fields: [], rowCount: 0, rows: [], location: { start: 0, end: 0 } } as any, state: t };
+                    endCall(db, t);
+                    return;
+                }
+            }
+        }
 
         let lastResult: StatementResult;
-        for (const s of this.stmts) {
-            // Execute statement
-            const r = s.executeStatement(t, this.args);
-            r.result.rows = cleanResults(r.result.rows);
-            yield r;
-            lastResult = r;
-            t = r.state;
+        try {
+            for (const s of stmts) {
+                // Execute statement
+                const r = s.executeStatement(t, this.args);
+                r.result.rows = cleanResults(r.result.rows);
+                yield r;
+                lastResult = r;
+                t = r.state;
+            }
+        } catch (e) {
+            if (!outerTx) {
+                failCall(db, t);
+            }
+            throw e;
         }
 
         if (this.parent.lastSelect) {
@@ -263,10 +360,7 @@ class Bound implements _IBoundQuery {
         this.parent.executed?.();
 
         if (!outerTx) {
-            // run any deferred (DEFERRABLE INITIALLY DEFERRED) constraint checks before
-            // finalizing - a violation aborts the batch, so nothing persists to root
-            runDeferredChecks(lastResult!.state);
-            lastResult!.state.fullCommit();
+            endCall(db, lastResult!.state);
         }
     }
 

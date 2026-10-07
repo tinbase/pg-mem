@@ -55,7 +55,7 @@ export interface _ISchema extends ISchema {
     getTable(table: string, nullIfNotFound?: boolean): _ITable;
     tablesCount(t: _Transaction): number;
     listTables(t?: _Transaction): Iterable<_ITable>;
-    declareTable(table: Schema, noSchemaChange?: boolean): _ITable;
+    declareTable(table: Schema, noSchemaChange?: boolean, inTransaction?: _Transaction): _ITable;
     createSequence(t: _Transaction, opts: CreateSequenceOptions | nil, name: QName | nil): _ISequence;
     /** Get functions matching this overload */
     resolveFunction(name: string | QName, args: IValue[], forceOwn?: boolean): _FunctionDefinition | nil;
@@ -155,15 +155,27 @@ export type _ArgDefDetails = ArgDefDetails & {
 
 export interface _Transaction {
     readonly isChild: boolean;
-    /** Create a new transaction within this transaction */
-    fork(): _Transaction;
+    /** true inside a BEGIN … COMMIT/ROLLBACK block (this transaction or an ancestor was opened by BEGIN) */
+    readonly inExplicitBlock: boolean;
+    /** transaction start: the value of now() / current_timestamp for its whole lifetime */
+    readonly startedAt: Date;
+    /** set when a statement failed inside an explicit block: Postgres refuses everything but COMMIT/ROLLBACK until the block ends */
+    aborted: boolean;
+    /** Create a new transaction within this transaction (explicit = opened by BEGIN) */
+    fork(explicit?: boolean): _Transaction;
     /** Commit this transaction (returns the parent transaction) */
     commit(): _Transaction;
     /** Commits this transaction and all underlying transactions */
     fullCommit(): _Transaction;
     rollback(): _Transaction;
-    /** Capture the current state under a named savepoint */
+    /** Capture the current state under a named savepoint (the schema is captured lazily, by the next DDL) */
     savepoint(name: string): void;
+    /** Record the schema before this transaction's first DDL, so a rollback can restore it */
+    checkpointSchema(capture: () => () => void): void;
+    /** Roll back the schema of this transaction and every enclosing one (a failed call) */
+    discardAll(): void;
+    /** The BEGIN block this transaction belongs to, if any */
+    readonly explicitBlock: _Transaction | null;
     /** Restore the state captured by a named savepoint (keeping the savepoint) */
     rollbackTo(name: string): void;
     /** Discard a named savepoint (and any established after it) */
@@ -387,6 +399,13 @@ export interface _IDb extends IMemoryDb {
     readonly options: MemoryDbOptions;
     readonly public: _ISchema;
     readonly data: _Transaction;
+    /**
+     * The transaction block a BEGIN left open at the end of a query call.
+     * Postgres keeps a transaction open across round-trips until COMMIT/ROLLBACK; pg-mem used to
+     * commit at the end of every call, so `begin` / `delete` / `rollback` sent separately (as every
+     * driver does) persisted the delete. The next call resumes this transaction instead of forking root.
+     */
+    sessionTx: _Transaction | null;
     readonly searchPath: ReadonlyArray<string>;
     /** session-scoped named prepared statements (SQL-level PREPARE / EXECUTE);
      * each entry is a runner that binds args and executes against a transaction */
@@ -446,6 +465,10 @@ export interface _ITable extends IMemoryTable<any>, _RelationBase {
     readonly rls: TableRls;
     createPolicy(policy: Policy): void;
     dropPolicy(name: string, ifExists: boolean): void;
+    /** every constraint on this table (FKs, uniques, checks, ...) */
+    listConstraints?(): Iterable<_IConstraint>;
+    /** foreign keys on any table that reference this one (only those through `viaColumns` when given) */
+    referencingForeignKeys?(viaColumns?: string[]): _IForeignKeyRef[];
     setRowLevelSecurity(action: 'enable' | 'disable' | 'force' | 'no force'): void;
     /** Triggers attached to this table */
     readonly triggers: TableTriggers;
@@ -523,6 +546,14 @@ export interface _Column {
     rename(to: string, t: _Transaction): this;
     drop(t: _Transaction): void;
     onDrop(sub: DropHandler): ISubscription;
+}
+
+/** The parts of a foreign key that dependency checks need. */
+export interface _IForeignKeyRef {
+    readonly name: string;
+    readonly tableName: string;
+    readonly foreignColumns: string[];
+    uninstall(t: _Transaction): void;
 }
 
 export interface CreateIndexDef {

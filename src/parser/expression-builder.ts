@@ -1,10 +1,10 @@
 import { _ISelection, IValue, _IType, _ISchema, _IAlias, _Transaction } from '../interfaces-private';
 import { currentRoleName, sessionRoleName } from '../execution/roles';
-import { buildLikeMatcher, nullIsh, hasNullish, intervalToSec, parseTime, asSingleQName, colToStr, executionCtx, ignore } from '../utils';
+import { buildLikeMatcher, nullIsh, hasNullish, intervalToSec, parseTime, asSingleQName, colToStr, executionCtx, ignore, transactionNow } from '../utils';
 import { DataType, CastError, QueryError, NotSupported, nil, ColumnNotFound } from '../interfaces';
 import hash from 'object-hash';
 import { Value, Evaluator } from '../evaluator';
-import { Types, isNumeric, reconciliateTypes, ArrayType, RecordCol } from '../datatypes';
+import { Types, isNumeric, reconciliateTypes, ArrayType, RecordCol, crossesTypeCategory } from '../datatypes';
 import { Expr, ExprBinary, UnaryOperator, ExprCase, ExprWhen, ExprMember, ExprArrayIndex, ExprTernary, BinaryOperator, SelectStatement, ExprValueKeyword, ExprExtract, Interval, ExprOverlay, ExprSubstring, ExprPosition, ExprCall } from 'pgsql-ast-parser';
 import lru from 'lru-cache';
 import { aggregationFunctions, getAggregator } from '../transforms/aggregation';
@@ -37,6 +37,11 @@ function checkNotUntypedArray(value: IValue) {
 
 export function uncache(data: _ISelection) {
     builtLru.del(data);
+}
+
+/** Drops every cached build: a build can embed schema state (e.g. another table's policies in a subquery) */
+export function uncacheAll() {
+    builtLru.reset();
 }
 
 function _buildValue(val: Expr): IValue {
@@ -122,6 +127,11 @@ function _buildValueReal(val: Expr): IValue {
                 // failed as "parts have not been read by the query planner".
                 ignore(val.value);
                 return new Evaluator(Types.bigint, null, val.valueText, null, val.valueText);
+            }
+            if (val.value > 2147483647 || val.value < -2147483648) {
+                // postgres types an integer literal that does not fit int4 as bigint, so that
+                // assigning it to an integer column is "integer out of range"
+                return new Evaluator(Types.bigint, null, String(val.value), null, String(val.value));
             }
             return Value.number(val.value, Types.integer);
         case 'call':
@@ -307,11 +317,14 @@ function buildKeyword(kw: ExprValueKeyword, args: Expr[]): IValue {
             return Value.constant(Types.text(), 'pg_mem');
         case 'current_schema':
             return Value.constant(Types.text(), 'public');
+        // evaluated per execution, not at compile time (a cached plan must not freeze the clock),
+        // from the transaction start like now(); current_date is that instant's date
         case 'current_date':
-            return Value.constant(Types.date, new Date());
+            return transactionClock(Types.timestamptz()).cast(Types.date);
         case 'current_timestamp':
+            return transactionClock(Types.timestamptz());
         case 'localtimestamp':
-            return Value.constant(Types.timestamp(), new Date());
+            return transactionClock(Types.timestamptz()).cast(Types.timestamp());
         case 'localtime':
         case 'current_time':
             throw new NotSupported('"date" data type, please file an issue in https://github.com/oguimbal/pg-mem if you need it !');
@@ -320,6 +333,10 @@ function buildKeyword(kw: ExprValueKeyword, args: Expr[]): IValue {
         default:
             throw NotSupported.never(kw.keyword);
     }
+}
+
+function transactionClock(type: _IType): IValue {
+    return new Evaluator(type, null, Math.random().toString(), [], () => transactionNow(), { unpure: true });
 }
 
 function buildUnary(op: UnaryOperator, operand: Expr) {
@@ -364,8 +381,26 @@ export function buildSubqueryArray(op: Expr): IValue {
 
 function buildIn(left: Expr, array: Expr, inclusive: boolean): IValue {
     let leftValue = _buildValue(left);
+    if (array.type === 'list') {
+        // `x IN (a, b)` is `x = a OR x = b`: every element must be comparable with x,
+        // so `uuid_col IN (text_col)` fails like `uuid_col = text_col` does
+        reconciliateTypes([leftValue, ...array.expressions.map(e => _buildValue(e))]);
+    }
     // `x IN (subquery)` needs the subquery's rows as a list, not a scalar
     let rightValue = isSubqueryNode(array) ? buildSelectAsArray(array as any) : _buildValue(array);
+    if (isSubqueryNode(array)) {
+        // `x IN (select col ...)` compares x with the column's type: `auth.uid() in (select <text col>)`
+        // is "operator does not exist: uuid = text", like the list and = forms
+        const col = (rightValue.type as ArrayType).of;
+        const leftUnknown = leftValue.isConstantLiteral && leftValue.type.primary === DataType.text;
+        if (col && !leftUnknown && crossesTypeCategory(leftValue.type, col)) {
+            throw new QueryError(`operator does not exist: ${leftValue.type.name} = ${col.name}`, '42883');
+        }
+    }
+    if (array.type !== 'list' && rightValue.type.primary !== DataType.list && rightValue.type.primary !== DataType.array) {
+        // `x IN (y)` - the parser drops the parens of a one-element list
+        reconciliateTypes([leftValue, rightValue]);
+    }
     return Value.in(leftValue, rightValue, inclusive);
 }
 
@@ -421,6 +456,17 @@ export function buildBinaryValue(leftValue: IValue, op: BinaryOperator, rightVal
     // resolve a custom operator registered on the schema (ranges, extensions, ...)
     const resolveCustom = () => {
         const { schema } = buildCtx();
+        // postgres has `text || anynonarray` and `anynonarray || text`: the other side goes
+        // through its text output function ('n=' || 1, 'at ' || now())
+        if (op === '||') {
+            const isStr = (v: IValue) => v.type.primary === DataType.text || v.type.primary === DataType.citext;
+            const nonArray = (v: IValue) => v.type.primary !== DataType.array && v.type.primary !== DataType.list && v.type.primary !== DataType.jsonb && v.type.primary !== DataType.null;
+            if (isStr(leftValue) && !isStr(rightValue) && nonArray(rightValue) && !rightValue.isConstantLiteral) {
+                rightValue = rightValue.cast(Types.text());
+            } else if (isStr(rightValue) && !isStr(leftValue) && nonArray(leftValue) && !leftValue.isConstantLiteral) {
+                leftValue = leftValue.cast(Types.text());
+            }
+        }
         const resolved = schema.resolveOperator(op, leftValue, rightValue);
         if (!resolved) {
             throw new QueryError(`operator does not exist: ${leftValue.type.name} ${op} ${rightValue.type.name}`, '42883');
@@ -510,6 +556,12 @@ export function buildBinaryValue(leftValue: IValue, op: BinaryOperator, rightVal
         case 'ILIKE':
         case 'NOT LIKE':
         case 'NOT ILIKE':
+            // LIKE is text ~~ text: a typed non-string operand has no operator (integer ~~ unknown)
+            for (const v of [leftValue, rightValue]) {
+                if (!(v.isConstantLiteral && v.type.primary === DataType.text) && crossesTypeCategory(v.type, Types.text()) && !rightValue.isAny) {
+                    throw new QueryError(`operator does not exist: ${leftValue.type.name} ~~ ${rightValue.type.name}`, '42883');
+                }
+            }
             expectBoth(Types.text());
             const caseSenit = op === 'LIKE' || op === 'NOT LIKE';
             const not = op === 'NOT ILIKE' || op === 'NOT LIKE';

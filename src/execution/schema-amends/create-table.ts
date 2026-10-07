@@ -32,6 +32,8 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
                         type: this.schema.getType(f.dataType),
                         serial: !f.dataType.kind && (f.dataType.name === 'serial' || f.dataType.name === 'bigserial'),
                     };
+                    // keep the type as written, for information_schema (see ColRef.declaredType)
+                    (nf as any).declaredType = f.dataType;
                     delete (nf as Optional<typeof nf>).dataType;
                     fields.push(nf);
                     break;
@@ -57,15 +59,11 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
 
     execute(t: _Transaction) {
 
-        // commit pending data before making changes
-        //  (because the creation does not support further rollbacks)
-        t = t.fullCommit();
-
         const partitionOf = this.p.partitionOf;
         const partitionBy = this.p.partitionBy;
 
         // perform creation
-        checkExistence(this.schema, this.name, this.ifNotExists, () => {
+        const created = checkExistence(this.schema, this.name, this.ifNotExists, () => {
             if (partitionOf) {
                 // a partition inherits its parent's columns
                 const parent = asTable(this.schema.getObject(partitionOf.parent));
@@ -73,19 +71,20 @@ export class ExecuteCreateTable extends ExecHelper implements _IStatementExecuto
                     name: c.id!,
                     type: c.type,
                 }));
-                const child = this.schema.declareTable({ name: this.toDeclare.name, fields });
+                const child = this.schema.declareTable({ name: this.toDeclare.name, fields }, false, t);
                 setupChildPartition(parent, child, partitionOf.bound);
             } else {
-                const table = this.schema.declareTable(this.toDeclare);
+                const table = this.schema.declareTable(this.toDeclare, false, t);
                 if (partitionBy) {
                     setupPartitionedParent(table, partitionBy);
                 }
             }
         });
-
-
-        // new implicit transaction
-        t = t.fork();
+        if (!created) {
+            // IF NOT EXISTS on an existing table is a no-op in postgres (a NOTICE): the column
+            // definitions and their constraints are intentionally unused, not unsupported
+            ignore(this.p);
+        }
         return this.noData(t, 'CREATE');
     }
 }

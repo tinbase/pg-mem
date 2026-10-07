@@ -17,8 +17,57 @@ export class Transaction implements _Transaction {
         return !!this.parent;
     }
 
-    private constructor(private parent: Transaction | null, private data: ImMap<symbol, any>) {
+    aborted = false;
+
+    /** puts the schema back as it was before this transaction's first DDL (see schema-snapshot.ts) */
+    schemaRestore?: () => void;
+
+    /**
+     * Called before a DDL statement runs in this transaction: this transaction and every enclosing
+     * one that has not seen DDL yet record the current schema, so whichever of them rolls back
+     * restores it. They all share one capture - the schema is the same for all of them right now.
+     */
+    checkpointSchema(capture: () => () => void): void {
+        let restore: (() => void) | undefined;
+        const get = () => restore ??= capture();
+        for (let x: Transaction | null = this; x && x.isChild; x = x.parent) {
+            if (!x.schemaRestore) {
+                x.schemaRestore = get();
+            }
+            // savepoints declared since the last DDL capture the schema now, lazily: most
+            // savepoints see no DDL, and capturing at SAVEPOINT copied the whole schema each time
+            for (const [k, v] of x.savepointSchemas) {
+                if (!v) {
+                    x.savepointSchemas.set(k, get());
+                }
+            }
+        }
+    }
+
+    /** the BEGIN block this transaction belongs to, if any */
+    get explicitBlock(): Transaction | null {
+        for (let x: Transaction | null = this; x; x = x.parent) {
+            if (x.explicit) {
+                return x;
+            }
+        }
+        return null;
+    }
+
+    get inExplicitBlock(): boolean {
+        return this.explicit || !!this.parent?.inExplicitBlock;
+    }
+
+    /**
+     * When this transaction started - what now(), current_timestamp and current_date return for
+     * its whole lifetime in postgres. A transaction forked from root starts now; nested ones
+     * (BEGIN inside the implicit transaction of a call, savepoint-like children) inherit it.
+     */
+    readonly startedAt: Date;
+
+    private constructor(private parent: Transaction | null, private data: ImMap<symbol, any>, private explicit = false) {
         this.origData = data;
+        this.startedAt = parent?.isChild ? parent.startedAt : new Date();
     }
 
 
@@ -26,8 +75,8 @@ export class Transaction implements _Transaction {
         return new Transaction(null, this.data);
     }
 
-    fork(): _Transaction {
-        return new Transaction(this, this.data);
+    fork(explicit = false): _Transaction {
+        return new Transaction(this, this.data, explicit);
     }
 
     commit(): _Transaction {
@@ -35,7 +84,26 @@ export class Transaction implements _Transaction {
             return this;
         }
         if (this.parent.data !== this.origData) {
-            throw new NotSupported('Concurrent transactions');
+            // the parent moved on while we were open - e.g. CREATE SCHEMA registers its catalogue
+            // tables straight into root. Rebase our changes onto it, key by key; only the same
+            // key changed on both sides is a real conflict.
+            let merged = this.parent.data;
+            for (const [k, v] of this.data) {
+                if (this.origData.get(k) === v) {
+                    continue;
+                }
+                if (merged.get(k) !== this.origData.get(k)) {
+                    throw new NotSupported('Concurrent transactions');
+                }
+                merged = merged.set(k, v);
+            }
+            for (const k of this.origData.keys()) {
+                if (!this.data.has(k)) {
+                    merged = merged.delete(k);
+                }
+            }
+            this.parent.data = merged;
+            return this.parent;
         }
         this.parent.data = this.data;
         return this.parent;
@@ -49,20 +117,41 @@ export class Transaction implements _Transaction {
     }
 
     rollback() {
+        this.schemaRestore?.();
         return this.parent ?? this;
+    }
+
+    /** the outermost transaction of this call or block: discarding it undoes everything */
+    discardAll(): void {
+        let outer: Transaction | null = null;
+        for (let x: Transaction | null = this; x && x.isChild; x = x.parent) {
+            if (x.schemaRestore) {
+                outer = x;
+            }
+        }
+        outer?.schemaRestore?.();
     }
 
     savepoint(name: string): void {
         // re-declaring a name captures the current state under it (postgres hides the
         // older savepoint of the same name; we simply overwrite - close enough for v1)
+        this.savepoints.delete(name); // re-inserted last: it is now the newest savepoint
         this.savepoints.set(name, this.data);
+        // the schema is captured by the first DDL that follows (see checkpointSchema)
+        this.savepointSchemas.set(name, null);
     }
+
+    /** savepoint → schema restore, or null while no DDL has run since it was declared */
+    private savepointSchemas = new Map<string, (() => void) | null>();
 
     rollbackTo(name: string): void {
         const saved = this.savepoints.get(name);
         if (saved === undefined) {
             throw new QueryError(`savepoint "${name}" does not exist`);
         }
+        this.savepointSchemas.get(name)?.();
+        // the schema is back to the savepoint's: the next DDL captures it afresh
+        this.savepointSchemas.set(name, null);
         this.data = saved;
         // the savepoint survives (can be rolled back to again), but any savepoints
         // established after it are discarded
@@ -83,11 +172,13 @@ export class Transaction implements _Transaction {
                 reached = true;
                 if (inclusive) {
                     this.savepoints.delete(k);
+                    this.savepointSchemas.delete(k);
                 }
                 continue;
             }
             if (reached) {
                 this.savepoints.delete(k);
+                this.savepointSchemas.delete(k);
             }
         }
     }
