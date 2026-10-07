@@ -72,7 +72,7 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
             const toJsonArg = args[0].type;
             type = Types.jsonb;
             acceptNulls = true;
-            get = (v: any) => v instanceof Date ? v.toISOString() : toJsonValue(v ?? null, toJsonArg);
+            get = (v: any) => toJsonValue(v ?? null, toJsonArg);
             break;
         }
         case 'json_build_object':
@@ -88,7 +88,8 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
                     if (nullIsh(kv[i])) {
                         throw new QueryError(`argument ${i + 1}: key must not be null`, '22004');
                     }
-                    ret[String(kv[i])] = kv[i + 1] ?? null;
+                    // values convert as to_jsonb would (numeric -> number, date -> 'YYYY-MM-DD', ...)
+                    ret[String(kv[i])] = toJsonValue(kv[i + 1] ?? null, args[i + 1].type);
                 }
                 return ret;
             };
@@ -98,7 +99,7 @@ export function buildCall(name: string | QName, args: IValue[]): IValue {
         case 'jsonb_build_array': {
             type = Types.jsonb;
             acceptNulls = true;
-            get = (...vals: any[]) => vals.map(v => v ?? null);
+            get = (...vals: any[]) => vals.map((v, i) => toJsonValue(v ?? null, args[i].type));
             break;
         }
         // polymorphic array functions: need the actual element type of their argument,

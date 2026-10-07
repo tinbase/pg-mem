@@ -132,7 +132,7 @@ export class ColRef implements _Column {
 
     rename(to: string, t: _Transaction): this {
         if (this.table.getColumnRef(to, true)) {
-            throw new QueryError(`Column "${to}" already exists`);
+            throw new QueryError(`column "${to}" of relation "${this.table.name}" already exists`, '42701');
         }
         assertNotSystemColumn(to);
 
@@ -258,7 +258,7 @@ export class ColRef implements _Column {
             return;
         }
         if (nullIsh(col)) {
-            throw new QueryError(`null value in column "${this.expression.id}" violates not-null constraint`);
+            throw new QueryError(`null value in column "${this.expression.id}" of relation "${this.table.name}" violates not-null constraint`, '23502');
         }
     }
 

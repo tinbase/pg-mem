@@ -48,7 +48,7 @@ function tokenize(code: string): string[] {
     // first so its content — which may contain ; ' etc. — is not split). JS regex
     // backreferences let us balance the tag, which the moo lexer can't do.
     const raw = stripComments(code)
-        .match(/\$([a-zA-Z_]\w*)?\$[\s\S]*?\$\1\$|'(?:[^']|'')*'|\d+\.\d+|\d+|\.\.|:=|::|[+\-*/<>=~!@#%^&|`?]+|[a-zA-Z_][\w$]*|[(),.;]|[^\s]/g) ?? [];
+        .match(/\$([a-zA-Z_]\w*)?\$[\s\S]*?\$\1\$|'(?:[^']|'')*'|"(?:[^"]|"")*"|\d+\.\d+|\d+|\.\.|:=|::|[+\-*/<>=~!@#%^&|`?]+|[a-zA-Z_][\w$]*|[(),.;]|[^\s]/g) ?? [];
     return raw.flatMap(splitOperator);
 }
 
@@ -78,6 +78,16 @@ function unquote(s: string): string {
         return s.slice(1, -1).replace(/''/g, `'`);
     }
     return s;
+}
+
+/** a quoted identifier token without its quotes (doubled quotes inside become one) */
+function unquoteIdent(tok: string): string {
+    return tok.slice(1, -1).replace(/""/g, '"');
+}
+
+/** a variable name as a token: bare when it is a plain lower-case identifier, quoted otherwise */
+function identToken(name: string): string {
+    return /^[a-z_][a-z0-9_$]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`;
 }
 
 function joinTokens(toks: string[]): string {
@@ -344,10 +354,11 @@ class GParser {
                 return this.parseBlockBody();
             default: {
                 // assignment:  name := expr   |   name = expr
-                const name = this.next();
+                const tok = this.next();
+                const name = tok.startsWith('"') ? unquoteIdent(tok) : tok;
                 const op = this.peek();
                 if (op !== ':=' && op !== '=') {
-                    throw new NotSupported(`plpgsql statement starting with "${name}"`);
+                    throw new NotSupported(`plpgsql statement starting with "${tok}"`);
                 }
                 this.i++;
                 const expr = this.readUntil([';'], true);
@@ -709,8 +720,10 @@ function mangleTrigger(toks: string[]): string[] {
             i += 3;
             continue;
         }
-        if ((lt === 'new' || lt === 'old') && toks[i + 1] === '.' && /^[a-zA-Z_]/.test(toks[i + 2] ?? '')) {
-            out.push((lt === 'new' ? '__n_' : '__o_') + toks[i + 2].toLowerCase());
+        if ((lt === 'new' || lt === 'old') && toks[i + 1] === '.' && /^[a-zA-Z_"]/.test(toks[i + 2] ?? '')) {
+            // NEW.col folds to lower case; NEW."Col" keeps its case, as a column name does
+            const col = toks[i + 2].startsWith('"') ? unquoteIdent(toks[i + 2]) : toks[i + 2].toLowerCase();
+            out.push(identToken((lt === 'new' ? '__n_' : '__o_') + col));
             i += 2;
         } else if (lt === 'new') {
             out.push(`'__trg_new__'`);

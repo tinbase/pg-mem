@@ -51,8 +51,12 @@ export function parseSql(sql: string, entry?: string): any {
         }
 
 
-        // throw a nice parsing error.
-        throw new QueryError(`💔 Your query failed to parse.
+        // postgres' first line (what a caller showing one line sees), pg-mem's detail after it
+        // (pg-mem terminates every query with ';', so failing on it means the input ran out)
+        const near = /Unexpected [^:]*token: "([^"]*)"/.exec(msg)?.[1];
+        const where = near !== undefined && near !== ';' ? `at or near "${near}"` : 'at end of input';
+        throw new QueryError(`syntax error ${where}
+💔 Your query failed to parse.
 This is most likely due to a SQL syntax error. However, you might also have hit a bug, or an unimplemented feature of pg-mem.
 If this is the case, please file an issue at https://github.com/oguimbal/pg-mem along with a query that reproduces this syntax error.
 
@@ -60,7 +64,7 @@ If this is the case, please file an issue at https://github.com/oguimbal/pg-mem 
 
     ${sql}
 
-💀 ${msg}`);
+💀 ${msg}`, '42601');
     }
 
 }

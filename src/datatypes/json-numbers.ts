@@ -29,6 +29,19 @@ export function toJsonValue(value: any, type: _IType | nil): any {
         return value;
     }
 
+    // dates and times are json strings in postgres' own text format, not JS's toISOString()
+    // (`row_to_json` of a date column is "2026-05-26", not "2026-05-26T00:00:00.000Z")
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        switch (type.primary) {
+            case DataType.date:
+                return value.toISOString().slice(0, 10);
+            case DataType.timestamp:
+                return pgIsoTime(value);
+            case DataType.timestamptz:
+                return pgIsoTime(value) + '+00:00';
+        }
+    }
+
     if (JSON_NUMBER_TYPES.has(type.primary)) {
         if (typeof value === 'string') {
             const n = Number(value);
@@ -64,4 +77,11 @@ export function toJsonValue(value: any, type: _IType | nil): any {
     }
 
     return value;
+}
+
+/** YYYY-MM-DDTHH:MM:SS[.fff] in UTC, fractional seconds only when non-zero (postgres' json format) */
+function pgIsoTime(d: Date): string {
+    const iso = d.toISOString(); // YYYY-MM-DDTHH:MM:SS.mmmZ
+    const ms = iso.slice(20, 23).replace(/0+$/, '');
+    return iso.slice(0, 19) + (ms ? '.' + ms : '');
 }
