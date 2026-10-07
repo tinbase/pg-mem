@@ -394,7 +394,7 @@ function buildIn(left: Expr, array: Expr, inclusive: boolean): IValue {
         const col = (rightValue.type as ArrayType).of;
         const leftUnknown = leftValue.isConstantLiteral && leftValue.type.primary === DataType.text;
         if (col && !leftUnknown && crossesTypeCategory(leftValue.type, col)) {
-            throw new QueryError(`operator does not exist: ${leftValue.type.name} = ${col.name}`, '42883');
+            throw new QueryError(`operator does not exist: ${pgTypeName(leftValue.type)} = ${pgTypeName(col)}`, '42883');
         }
     }
     if (array.type !== 'list' && rightValue.type.primary !== DataType.list && rightValue.type.primary !== DataType.array) {
@@ -404,6 +404,19 @@ function buildIn(left: Expr, array: Expr, inclusive: boolean): IValue {
     return Value.in(leftValue, rightValue, inclusive);
 }
 
+
+/** a type as postgres spells it in error messages (format_type) */
+function pgTypeName(t: _IType): string {
+    switch (t.primary) {
+        case DataType.bool: return 'boolean';
+        case DataType.float: return 'double precision';
+        case DataType.decimal: return 'numeric';
+        case DataType.timestamptz: return 'timestamp with time zone';
+        case DataType.timestamp: return 'timestamp without time zone';
+        case DataType.time: return 'time without time zone';
+    }
+    return t.name;
+}
 
 function buildBinary(val: ExprBinary): IValue {
     let leftValue = _buildValue(val.left);
@@ -436,6 +449,13 @@ export function buildBinaryValue(leftValue: IValue, op: BinaryOperator, rightVal
             } else {
                 rightValue = doMap(rightValue);
             }
+        }
+        // two typed operands from different type categories: postgres has no such operator, and
+        // says so ("operator does not exist: uuid = text") - which is also what tells the author
+        // which side to cast
+        const unknown = (v: IValue) => v.isConstantLiteral && v.type.primary === DataType.text;
+        if (!unknown(leftValue) && !unknown(rightValue) && crossesTypeCategory(leftValue.type, rightValue.type)) {
+            throw new QueryError(`operator does not exist: ${pgTypeName(leftValue.type)} ${op} ${pgTypeName(rightValue.type)}`, '42883');
         }
         const type: _IType = reconciliateTypes([leftValue, rightValue]);
         leftValue = leftValue.cast(type);
