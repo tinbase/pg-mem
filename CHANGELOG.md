@@ -4,6 +4,10 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.3
+
+- A user column named after a system column (`tableoid`, `xmin`, `cmin`, `xmax`, `cmax`, `ctid`) is refused in CREATE TABLE, ADD COLUMN and RENAME COLUMN, as postgres does: `column name "xmin" conflicts with a system column name`. The migration validator accepted DDL postgres rejects.
+
 ## 4.0.2
 
 Gaps found by running 80 production projects' migrations and seeds through the agent's validator on pg-mem and on PGlite; all 80 now match. Requires `@tinbase/pgsql-ast-parser` 12.2.1.

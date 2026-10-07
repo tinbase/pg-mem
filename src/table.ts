@@ -77,6 +77,15 @@ class ColumnManager {
     }
 }
 
+/** every postgres table has these hidden columns; no user column may take their names */
+const SYSTEM_COLUMNS = new Set(['tableoid', 'xmin', 'cmin', 'xmax', 'cmax', 'ctid']);
+
+export function assertNotSystemColumn(name: string) {
+    if (SYSTEM_COLUMNS.has(name)) {
+        throw new QueryError(`column name "${name}" conflicts with a system column name`, '42701');
+    }
+}
+
 export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _ITable {
     comment: string | nil;
     readonly rls: TableRls = emptyRls();
@@ -264,6 +273,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         if (this.columnMgr.has(column.name)) {
             throw new QueryError(`Column "${column.name}" already exists`);
         }
+        assertNotSystemColumn(column.name);
         const type = typeof column.type === 'string'
             ? this.ownerSchema.getType(column.type)
             : column.type;

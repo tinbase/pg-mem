@@ -1,5 +1,6 @@
 import { _Column, IValue, _IIndex, NotSupported, _Transaction, QueryError, _IType, SchemaField, ChangeHandler, nil, ISubscription, DropHandler } from './interfaces-private';
 import type { MemoryTable } from './table';
+import { assertNotSystemColumn } from './table';
 import { Evaluator } from './evaluator';
 import { ColumnConstraint, AlterColumn, Expr, toSql, DataTypeDef } from 'pgsql-ast-parser';
 import { policiesDependingOn } from './execution/policy-deps';
@@ -133,6 +134,7 @@ export class ColRef implements _Column {
         if (this.table.getColumnRef(to, true)) {
             throw new QueryError(`Column "${to}" already exists`);
         }
+        assertNotSystemColumn(to);
 
         // first, move data (this cannot throw => OK to modify mutable data)
         this.table.remapData(t, v => {

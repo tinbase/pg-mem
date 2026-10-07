@@ -668,6 +668,16 @@ describe('corpus parity', () => {
         });
     });
 
+    describe('system column names', () => {
+        it('are refused for user columns, as in postgres', () => {
+            expectQueryError(() => none(`create table t ("xmin" text)`), /column name "xmin" conflicts with a system column name/);
+            none(`create table z (id int)`);
+            expectQueryError(() => none(`alter table z add column ctid text`), /conflicts with a system column name/);
+            expectQueryError(() => none(`alter table z rename column id to tableoid`), /conflicts with a system column name/);
+            none(`create table w (xminimum int, "Xmin" int)`);
+        });
+    });
+
     describe('CREATE OR REPLACE TRIGGER', () => {
         it('replaces an existing trigger', () => {
             none(`create table o (id int, n int);
