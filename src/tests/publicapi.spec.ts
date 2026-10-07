@@ -31,7 +31,7 @@ describe('Public api', () => {
 
     it('matches constraints', () => {
         const table = simple();
-        expect(() => table.insert({})).toThrow(/null value in column "id" violates not-null constraint/);
+        expect(() => table.insert({})).toThrow(/null value in column "id" of relation "test" violates not-null constraint/);
     })
 
     it('cannot insert twice', () => {

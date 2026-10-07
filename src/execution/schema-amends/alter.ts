@@ -35,7 +35,7 @@ export class Alter extends ExecHelper implements _IStatementExecutor {
                             ignoreChange();
                             break;
                         } else {
-                            throw new QueryError('Column already exists: ' + col.id);
+                            throw new QueryError(`column "${col.id}" of relation "${this.table.name}" already exists`, '42701');
                         }
                     } else {
                         ignore(change.ifNotExists);

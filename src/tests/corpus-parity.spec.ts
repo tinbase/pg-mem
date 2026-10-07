@@ -678,6 +678,64 @@ describe('corpus parity', () => {
         });
     });
 
+    describe('aggregates over numeric and bigint', () => {
+        // numeric and bigint are held as digit strings: sum() concatenated them ('10' + '32.5' = '1032.5')
+        // and max/min compared them as text ('9' > '10')
+        beforeEach(() => none(`create table o (g int, a numeric, d bigint); insert into o values (1, 0.1, 9007199254740993), (1, 0.2, 1), (1, 10, -3), (2, null, null)`));
+        it('sum adds exactly', () => {
+            expect(many(`select g, sum(a) as a, sum(d) as d from o group by g order by g`)).toEqual([{ g: 1, a: '10.3', d: '9007199254740991' }, { g: 2, a: null, d: null }]);
+        });
+        it('avg is exact, max/min compare as numbers', () => {
+            expect(many(`select avg(a) as a, max(a) as mx, min(a) as mn, max(d) as dx from o`)).toEqual([{ a: 3.433333333333333, mx: '10', mn: '0.1', dx: '9007199254740993' }]);
+        });
+    });
+
+    describe('plpgsql quoted identifiers', () => {
+        it('NEW."col" / OLD."col" in triggers, and quoted names in function bodies', () => {
+            none(`create table t (id int, "updated_at" timestamptz, "My Col" text);
+                create function f() returns trigger language plpgsql as $$ begin new."updated_at" := now(); if new."My Col" is null then new."My Col" := 'y'; end if; return new; end $$;
+                create trigger tr before insert on t for each row execute function f();
+                insert into t (id) values (1)`);
+            expect(many(`select "My Col" as c, "updated_at" is not null as u from t`)).toEqual([{ c: 'y', u: true }]);
+            none(`do $$ begin update t set "My Col" = 'z' where "id" = 1; end $$`);
+            expect(many(`select "My Col" as c from t`)).toEqual([{ c: 'z' }]);
+        });
+    });
+
+    describe('postgres wording for errors the validator shows', () => {
+        it('duplicate column, NOT NULL, policy predicate type, syntax errors', () => {
+            none(`create table t (id int not null, s text)`);
+            expectQueryError(() => none(`alter table t add column id text`), /column "id" of relation "t" already exists/);
+            expectQueryError(() => none(`insert into t (s) values ('x')`), /null value in column "id" of relation "t" violates not-null constraint/);
+            expectQueryError(() => none(`create policy p on t using (s)`), /argument of POLICY must be type boolean, not type text/);
+            expectQueryError(() => none(`select from where`), /^syntax error at or near "where"/);
+            expectQueryError(() => none(`insert into t values (1,`), /^syntax error at end of input/);
+        });
+    });
+
+    describe('dates, times and numbers inside json', () => {
+        // postgres' text format, not JS's toISOString(); tinbase's REST answers are built with row_to_json
+        it('row_to_json / json_agg / to_jsonb / jsonb_build_object / jsonb_build_array', () => {
+            none(`create table k (d date, ts timestamp, tz timestamptz, price numeric(10,2)); insert into k values ('2026-05-26', '2026-05-26 10:30:00', '2026-05-26 10:30:00.5+00', 98.4)`);
+            const row = { d: '2026-05-26', ts: '2026-05-26T10:30:00', tz: '2026-05-26T10:30:00.5+00:00', price: 98.4 };
+            expect(many(`select row_to_json(k) as j from k`)).toEqual([{ j: row }]);
+            expect(many(`select json_agg(k) as j from k`)).toEqual([{ j: [row] }]);
+            expect(many(`select to_jsonb(d) as a, jsonb_build_object('d', d, 'p', price) as b, jsonb_build_array(ts, price) as c from k`))
+                .toEqual([{ a: '2026-05-26', b: { d: '2026-05-26', p: 98.4 }, c: ['2026-05-26T10:30:00', 98.4] }]);
+        });
+    });
+
+    describe('enums order by declaration', () => {
+        // from a production project: order by an enum column came back alphabetical
+        it('in ORDER BY, comparisons and max/min', () => {
+            none(`create type prio as enum ('low', 'medium', 'high', 'critical'); create table t (p prio); create index on t (p);
+                insert into t values ('medium'), ('critical'), ('low'), ('high')`);
+            expect(many(`select p from t order by p`).map(r => r.p)).toEqual(['low', 'medium', 'high', 'critical']);
+            expect(many(`select p from t where p > 'medium' order by p`).map(r => r.p)).toEqual(['high', 'critical']);
+            expect(many(`select max(p) as mx, min(p) as mn from t`)).toEqual([{ mx: 'critical', mn: 'low' }]);
+        });
+    });
+
     describe('CREATE OR REPLACE TRIGGER', () => {
         it('replaces an existing trigger', () => {
             none(`create table o (id int, n int);

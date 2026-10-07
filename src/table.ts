@@ -271,7 +271,7 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
         }
 
         if (this.columnMgr.has(column.name)) {
-            throw new QueryError(`Column "${column.name}" already exists`);
+            throw new QueryError(`column "${column.name}" of relation "${this.name}" already exists`, '42701');
         }
         assertNotSystemColumn(column.name);
         const type = typeof column.type === 'string'

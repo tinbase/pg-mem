@@ -4,6 +4,15 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.4
+
+From mutation probes and seeded reads over 120 production projects (validator on PGlite vs pg-mem).
+
+- **Wrong results, fixed:** `sum()` over numeric/bigint concatenated the digit strings (`sum` of 10 and 32.5 was `'1032.5'`), and `avg` was computed from that; `max`/`min` compared numeric/bigint as text (`max(9, 10)` was `9`). Now exact. Enums ordered alphabetically instead of by declaration (ORDER BY, `>`/`<`, and `max`/`min`, which now accept enums).
+- plpgsql: double-quoted identifiers are one token (`new."updated_at" := now()` in a trigger, quoted names in function bodies).
+- JSON: dates and times in postgres' format (`"2026-05-26"`, `"2026-05-26T10:30:00"`, `"...+00:00"`), and numerics as numbers, in `row_to_json`, `json_agg`, `to_json[b]`, `json[b]_build_object`, `json[b]_build_array`.
+- Postgres' wording for errors the migration validator shows: duplicate column (`column "x" of relation "t" already exists`), NOT NULL (names the relation), policy predicate type, and syntax errors (`syntax error at or near "x"` / `at end of input`, code 42601).
+
 ## 4.0.3
 
 - A user column named after a system column (`tableoid`, `xmin`, `cmin`, `xmax`, `cmax`, `ctid`) is refused in CREATE TABLE, ADD COLUMN and RENAME COLUMN, as postgres does: `column name "xmin" conflicts with a system column name`. The migration validator accepted DDL postgres rejects.

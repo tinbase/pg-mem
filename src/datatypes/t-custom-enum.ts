@@ -57,6 +57,16 @@ export class CustomEnumType extends TypeBase<string> {
     }
 
 
+    // an enum orders by its values' declaration order, not alphabetically
+    // ('low' < 'medium' < 'high' for `create type prio as enum ('low', 'medium', 'high')`)
+    doGt(a: string, b: string): boolean {
+        return this.values.indexOf(a) > this.values.indexOf(b);
+    }
+
+    doLt(a: string, b: string): boolean {
+        return this.values.indexOf(a) < this.values.indexOf(b);
+    }
+
     drop(t: _Transaction): void {
         this.schema._unregisterType(this);
     }

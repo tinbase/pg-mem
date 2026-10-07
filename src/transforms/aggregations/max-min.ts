@@ -20,10 +20,11 @@ class MinMax implements AggregationComputer<number> {
         return {
             feedItem: (item) => {
                 const value = this.exp.get(item, t);
+                // compare as the type does (numeric/bigint are digit strings: '9' > '10' as text)
                 if (!nullIsh(value) && (nullIsh(val) || (
                     this.isMax
-                        ? val! < value
-                        : val! > value
+                        ? this.exp.type.gt(value, val)
+                        : this.exp.type.lt(value, val)
                 ))) {
                     val = value;
                 }
@@ -55,7 +56,11 @@ export function buildMinMax(this: void, base: _ISelection, args: Expr[], op: 'ma
             case DataType.timestamptz:
                 break;
             default:
-                throw new QueryError(`function min(${what.type.primary}) does not exist`, '42883');
+                // enums (max(priority)) compare in declaration order
+                if (Array.isArray((what.type as any).values)) {
+                    break;
+                }
+                throw new QueryError(`function ${op}(${what.type.primary}) does not exist`, '42883');
         }
         return new MinMax(what, op === 'max');
     });

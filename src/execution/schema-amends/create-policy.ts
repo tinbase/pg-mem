@@ -29,7 +29,7 @@ export class CreatePolicy extends ExecHelper implements _IStatementExecutor {
             }
             const v = withSelection(this.table.selection, () => buildValue(expr));
             if (v.type.primary !== DataType.bool && v.type.primary !== DataType.null) {
-                throw new QueryError(`argument of POLICY ${clause} must be type boolean, not type ${v.type.name}`, '42804');
+                throw new QueryError(`argument of POLICY must be type boolean, not type ${v.type.name}`, '42804');
             }
         };
         check(p.using, 'USING');
