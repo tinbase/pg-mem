@@ -1,8 +1,7 @@
 import { _IStatementExecutor, _Transaction, StatementResult } from '../interfaces-private';
 import { ExecHelper } from './exec-utils';
 import { CommitStatement, RollbackStatement, StartTransactionStatement, BeginStatement, SavepointStatement, ReleaseSavepointStatement } from 'pgsql-ast-parser';
-import { ignore, executionCtx } from '../utils';
-import { captureSchema } from '../schema-snapshot';
+import { ignore } from '../utils';
 
 export class CommitExecutor extends ExecHelper implements _IStatementExecutor {
 
@@ -44,8 +43,7 @@ export class SavepointExecutor extends ExecHelper implements _IStatementExecutor
     }
 
     execute(t: _Transaction): StatementResult {
-        const db = executionCtx().schema.db;
-        t.savepoint(this.stmt.name.name, () => captureSchema(db));
+        t.savepoint(this.stmt.name.name);
         return this.noData(t, 'SAVEPOINT');
     }
 }

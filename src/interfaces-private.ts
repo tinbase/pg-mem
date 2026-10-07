@@ -168,8 +168,8 @@ export interface _Transaction {
     /** Commits this transaction and all underlying transactions */
     fullCommit(): _Transaction;
     rollback(): _Transaction;
-    /** Capture the current state under a named savepoint (and the schema, when given a capturer) */
-    savepoint(name: string, captureSchema?: () => () => void): void;
+    /** Capture the current state under a named savepoint (the schema is captured lazily, by the next DDL) */
+    savepoint(name: string): void;
     /** Record the schema before this transaction's first DDL, so a rollback can restore it */
     checkpointSchema(capture: () => () => void): void;
     /** Roll back the schema of this transaction and every enclosing one (a failed call) */

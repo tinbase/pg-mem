@@ -29,9 +29,17 @@ export class Transaction implements _Transaction {
      */
     checkpointSchema(capture: () => () => void): void {
         let restore: (() => void) | undefined;
+        const get = () => restore ??= capture();
         for (let x: Transaction | null = this; x && x.isChild; x = x.parent) {
             if (!x.schemaRestore) {
-                x.schemaRestore = restore ??= capture();
+                x.schemaRestore = get();
+            }
+            // savepoints declared since the last DDL capture the schema now, lazily: most
+            // savepoints see no DDL, and capturing at SAVEPOINT copied the whole schema each time
+            for (const [k, v] of x.savepointSchemas) {
+                if (!v) {
+                    x.savepointSchemas.set(k, get());
+                }
             }
         }
     }
@@ -124,16 +132,17 @@ export class Transaction implements _Transaction {
         outer?.schemaRestore?.();
     }
 
-    savepoint(name: string, captureSchema?: () => () => void): void {
+    savepoint(name: string): void {
         // re-declaring a name captures the current state under it (postgres hides the
         // older savepoint of the same name; we simply overwrite - close enough for v1)
+        this.savepoints.delete(name); // re-inserted last: it is now the newest savepoint
         this.savepoints.set(name, this.data);
-        if (captureSchema) {
-            this.savepointSchemas.set(name, captureSchema());
-        }
+        // the schema is captured by the first DDL that follows (see checkpointSchema)
+        this.savepointSchemas.set(name, null);
     }
 
-    private savepointSchemas = new Map<string, () => void>();
+    /** savepoint → schema restore, or null while no DDL has run since it was declared */
+    private savepointSchemas = new Map<string, (() => void) | null>();
 
     rollbackTo(name: string): void {
         const saved = this.savepoints.get(name);
@@ -141,6 +150,8 @@ export class Transaction implements _Transaction {
             throw new QueryError(`savepoint "${name}" does not exist`);
         }
         this.savepointSchemas.get(name)?.();
+        // the schema is back to the savepoint's: the next DDL captures it afresh
+        this.savepointSchemas.set(name, null);
         this.data = saved;
         // the savepoint survives (can be rolled back to again), but any savepoints
         // established after it are discarded
@@ -161,11 +172,13 @@ export class Transaction implements _Transaction {
                 reached = true;
                 if (inclusive) {
                     this.savepoints.delete(k);
+                    this.savepointSchemas.delete(k);
                 }
                 continue;
             }
             if (reached) {
                 this.savepoints.delete(k);
+                this.savepointSchemas.delete(k);
             }
         }
     }

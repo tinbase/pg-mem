@@ -277,3 +277,19 @@ export function checkWriteRls(table: _ITable, command: 'insert' | 'update', row:
         throw new QueryError(`new row violates row-level security policy for table "${table.name}"`, '42501');
     }
 }
+
+/**
+ * ON CONFLICT DO UPDATE on an RLS table: the existing row must pass the UPDATE (and, since the
+ * statement reads it, SELECT) USING policies. Postgres errors rather than skipping the row.
+ */
+export function checkConflictUpdateRls(table: _ITable, existing: Row, t: _Transaction): void {
+    if (!table.rls.enabled || bypassesRls(t)) {
+        return;
+    }
+    assertNoPolicyRecursion(table, 'update', t, true);
+    const compiled = compilePolicies(table.selection, table.rls.policies);
+    const role = currentRole(t).name;
+    if (!rowPasses(compiled, 'using', role, 'update', existing, t) || !rowPasses(compiled, 'using', role, 'select', existing, t)) {
+        throw new QueryError(`new row violates row-level security policy (USING expression) for table "${table.name}"`, '42501');
+    }
+}

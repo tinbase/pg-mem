@@ -49,6 +49,49 @@ describe('corpus parity', () => {
             expect(many(`select 1 as x`)).toEqual([{ x: 1 }]);
         });
 
+        it('a statement that fails to compile aborts the block too', () => {
+            none(`begin`);
+            none(`insert into k values (3, 3)`);
+            expectQueryError(() => many(`select * from k where nope = 1`), /nope/);
+            expectQueryError(() => many(`select 1`), /current transaction is aborted/);
+            none(`commit`);
+            expect(ns()).toEqual([1, 2]);
+        });
+
+        it('ROLLBACK TO SAVEPOINT recovers an aborted block without ending it', () => {
+            // the agent validator's attempt(): savepoint, run the model's SQL, rewind on error
+            none(`begin`);
+            none(`create table keep (id int); insert into k values (3, 3)`);
+            for (const bad of [`create table t1 (id uuid); select * from t1 where id = 'x'::text`, `create table t2 (id int); insert into t2 values (1/0)`]) {
+                none(`savepoint attempt`);
+                expectQueryError(() => none(bad));
+                none(`rollback to savepoint attempt`);
+                none(`release savepoint attempt`);
+            }
+            expectQueryError(() => none(`insert into k values (4, 1/0)`));
+            expectQueryError(() => none(`rollback to savepoint nope`), /savepoint "nope" does not exist/);
+            expectQueryError(() => many(`select 1`), /current transaction is aborted/);
+            none(`rollback`);
+            none(`begin; savepoint s; insert into k values (5, 5)`);
+            expectQueryError(() => none(`insert into k values (6, 1/0)`));
+            none(`rollback to savepoint s; insert into k values (7, 7); commit`);
+            expect(ns()).toEqual([1, 2, 7]);
+            expect(many(`select table_name from information_schema.tables where table_name in ('keep', 't1', 't2')`)).toEqual([]);
+        });
+
+        it('a re-declared savepoint is the newest one', () => {
+            none(`begin; savepoint s; savepoint t; savepoint s; rollback to savepoint s; release savepoint t; rollback`);
+        });
+
+        it('savepoints that see no DDL do not copy the schema', () => {
+            none(`begin`);
+            for (let i = 0; i < 50; i++) {
+                none(`savepoint s${i}; create table x${i} (id int); rollback to savepoint s${i}; release savepoint s${i}`);
+            }
+            none(`savepoint a; create table kept (id int); savepoint b; create table gone (id int); rollback to savepoint b; commit`);
+            expect(many(`select table_name from information_schema.tables where table_name in ('kept', 'gone', 'x0')`)).toEqual([{ table_name: 'kept' }]);
+        });
+
         it('savepoints work across calls', () => {
             none(`begin`);
             none(`insert into k values (3, 3)`);
@@ -460,6 +503,41 @@ describe('corpus parity', () => {
             expect(teams()).toEqual([1]);
             none(`create policy t2 on teams for select using (exists (select 1 from teams x where x.id = teams.id))`);
             expectQueryError(() => teams(), /infinite recursion detected in policy for relation "teams"/);
+        });
+    });
+
+    describe('RLS on INSERT ... ON CONFLICT', () => {
+        // checked against PGlite: the conflicting row is subject to the UPDATE policies, and
+        // DO NOTHING never hands back a row the insert did not write
+        beforeEach(() => none(`create role alice;
+            create table docs (id int primary key, owner text, body text);
+            insert into docs values (1, 'alice', 'a1'), (2, 'bob', 'b2');
+            alter table docs enable row level security;
+            create policy s on docs for select using (owner = current_user);
+            create policy i on docs for insert with check (owner = current_user);
+            create policy u on docs for update using (owner = current_user) with check (owner = current_user);
+            set role alice`));
+        const rows = () => {
+            none(`reset role`);
+            return many(`select id, owner, body from docs order by id`);
+        };
+
+        it('DO UPDATE on a row the role may not update fails', () => {
+            expectQueryError(() => many(`insert into docs values (2, 'alice', 'x') on conflict (id) do update set body = 'upserted' returning *`),
+                /violates row-level security policy \(USING expression\)/);
+            expect(rows()[1]).toEqual({ id: 2, owner: 'bob', body: 'b2' });
+        });
+
+        it('DO UPDATE checks the updated row against WITH CHECK, leaving it untouched on failure', () => {
+            expect(many(`insert into docs values (1, 'alice', 'x') on conflict (id) do update set body = 'mine' returning body`)).toEqual([{ body: 'mine' }]);
+            expectQueryError(() => none(`insert into docs values (1, 'alice', 'x') on conflict (id) do update set owner = 'bob'`),
+                /violates row-level security policy/);
+            expect(rows()[0]).toEqual({ id: 1, owner: 'alice', body: 'mine' });
+        });
+
+        it('DO NOTHING returns nothing for a conflicting row', () => {
+            expect(many(`insert into docs values (2, 'alice', 'x') on conflict (id) do nothing returning *`)).toEqual([]);
+            expect(many(`insert into docs values (2, 'alice', 'x') on conflict do nothing returning *`)).toEqual([]);
         });
     });
 

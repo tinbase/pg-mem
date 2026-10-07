@@ -444,7 +444,8 @@ export class MemoryTable extends DataSourceBase implements IMemoryTable<any>, _I
                     const key = index.buildKey(toInsert, t);
                     const found = index.eqFirst(key, t);
                     if (found) {
-                        return found; // ignore.
+                        // skipped, like the untargeted form: RETURNING yields nothing for it
+                        return null;
                     }
                 }
             } else {

@@ -57,6 +57,14 @@ function startCall(db: _IDb, statements: Statement[]): _Transaction {
     }
     if (open.aborted) {
         const first = statements[0]?.type;
+        if (first === 'rollback' && (statements[0] as any).to) {
+            // ROLLBACK TO SAVEPOINT is how a client recovers an aborted block without ending it
+            // (what drivers' nested transactions do after an error): rewind to the savepoint and
+            // carry on in the block. If the savepoint does not exist, that statement fails and the
+            // block stays aborted.
+            open.aborted = false;
+            return open;
+        }
         if (first === 'rollback' || first === 'commit') {
             // the block is over either way (a COMMIT on an aborted block is a ROLLBACK in
             // postgres): undo it, schema included, and carry on in whatever enclosed it
