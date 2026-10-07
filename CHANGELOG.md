@@ -4,6 +4,10 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.1
+
+- Comparisons across type categories fail with Postgres' own error, `operator does not exist: uuid = text` (was `cannot cast type text to uuid`), types spelled as Postgres spells them. Also for `x IN (select col ...)`. The SQL that is rejected does not change.
+
 ## 4.0.0
 
 Postgres parity for validating real Supabase migrations: pg-mem now rejects what Postgres rejects, rolls back schema changes, and enforces row-level security on every read and write path. Found by running 250 real RapidNative projects' migrations and seeds through pg-mem and PGlite side by side (`tools/corpus-diff`); all 5 sets of 50 now match. Requires `@tinbase/pgsql-ast-parser` 12.2.0.
