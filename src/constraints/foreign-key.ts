@@ -1,9 +1,10 @@
-import { ISubscription, NotSupported, QueryError } from '../interfaces';
+import { ISubscription, NotSupported, QueryError, DataType } from '../interfaces';
 import { Expr, ExprBinary, TableConstraintForeignKey } from 'pgsql-ast-parser';
-import { asTable, CreateIndexColDef, _IConstraint, _ITable, _Transaction } from '../interfaces-private';
+import { asTable, CreateIndexColDef, _IConstraint, _ITable, _IType, _Transaction } from '../interfaces-private';
 import { nullIsh } from '../utils';
 import { deferCheck } from '../execution/deferred-checks';
 import { enqueueRi } from '../execution/ri-queue';
+import { typeCategory } from '../datatypes';
 
 export class ForeignKey implements _IConstraint {
 
@@ -72,8 +73,14 @@ export class ForeignKey implements _IConstraint {
             throw new QueryError('Foreign key count mismatch');
         }
         cols.forEach((c, i) => {
-            if (fcols[i].expression.type !== c.expression.type) {
-                throw new QueryError(`Foreign key column type mismatch`);
+            // postgres needs an equality operator between the two types: varchar -> text and
+            // int -> bigint are fine (the checks below compare through typed expressions),
+            // text -> uuid is not
+            const lt = c.expression.type, ft = fcols[i].expression.type;
+            const category = typeCategory(lt);
+            const compatible = lt === ft || lt.primary === ft.primary || (!!category && category === typeCategory(ft));
+            if (!compatible) {
+                throw new QueryError(`foreign key constraint "${this.name}" cannot be implemented: key columns "${cst.localColumns[i].name}" and "${cst.foreignColumns[i].name}" are of incompatible types: ${lt.name} and ${ft.name}`, '42804');
             }
         });
 
@@ -107,7 +114,7 @@ export class ForeignKey implements _IConstraint {
             if (!old) {
                 return;
             }
-            const oVals = fcols.map(x => old[x.expression.id!]);
+            const oVals = fcols.map((x, i) => toType(old[x.expression.id!], x.expression.type, cols[i].expression.type));
             if (oVals.some(nullIsh)) {
                 return;
             }
@@ -120,7 +127,7 @@ export class ForeignKey implements _IConstraint {
                 right: {
                     type: 'constant',
                     value: oVals[i],
-                    dataType: fcols[i].expression.type as any, // hack
+                    dataType: cols[i].expression.type as any, // hack (value already in this type)
                 },
             }));
             const expr = equals.slice(1).reduce<Expr>((a, b) => ({
@@ -170,7 +177,7 @@ export class ForeignKey implements _IConstraint {
             if (!neu) {
                 return;
             }
-            const vals = cols.map(x => (neu as any)[x.expression.id!]);
+            const vals = cols.map((x, i) => toType((neu as any)[x.expression.id!], x.expression.type, fcols[i].expression.type));
             if (vals.some(nullIsh)) {
                 return;
             }
@@ -183,7 +190,7 @@ export class ForeignKey implements _IConstraint {
                 right: {
                     type: 'constant',
                     value: vals[i],
-                    dataType: cols[i].expression.type as any, // hack
+                    dataType: fcols[i].expression.type as any, // hack (value already in this type)
                 },
             }));
             const expr = equals.slice(1).reduce<Expr>((a, b) => ({
@@ -261,4 +268,24 @@ export class ForeignKey implements _IConstraint {
         // via the table's own ConstraintWrapper - or the catalogues keep listing a dead FK
         this.onUninstalled?.();
     }
+}
+
+/**
+ * A key value converted between the two (compatible) column types: they share a category, so
+ * only the numeric representation can differ - integer/float are JS numbers, bigint/numeric
+ * digit strings (bigint '1' <-> integer 1). Strings and dates are held the same way.
+ */
+function toType(value: any, from: _IType, to: _IType): any {
+    if (nullIsh(value) || from === to || from.primary === to.primary) {
+        return value;
+    }
+    switch (to.primary) {
+        case DataType.integer:
+        case DataType.float:
+            return typeof value === 'number' ? value : Number(value);
+        case DataType.bigint:
+        case DataType.decimal:
+            return typeof value === 'string' ? value : String(value);
+    }
+    return value;
 }

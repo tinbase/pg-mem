@@ -736,6 +736,34 @@ describe('corpus parity', () => {
         });
     });
 
+    describe('foreign keys between compatible types', () => {
+        // postgres accepts any pair with an equality operator (varchar -> text, int -> bigint)
+        it('are accepted and enforced, cascades included', () => {
+            none(`create table p (id bigint primary key); create table c (id int, pid integer references p(id) on delete cascade);
+                create table p2 (id varchar(20) primary key); create table c2 (pid text references p2(id) on update cascade);
+                insert into p values (1), (2); insert into c values (1, 1), (2, 2); insert into p2 values ('a'); insert into c2 values ('a')`);
+            expectQueryError(() => none(`insert into c values (9, 99)`), /violates foreign key constraint "c_pid_fkey"/);
+            none(`delete from p where id = 1; update p2 set id = 'b'`);
+            expect(many(`select id from c`)).toEqual([{ id: 2 }]);
+            expect(many(`select pid from c2`)).toEqual([{ pid: 'b' }]);
+        });
+        it('incompatible types fail with postgres\' reason', () => {
+            none(`create table u (id uuid primary key)`);
+            expectQueryError(() => none(`create table pr (id text references u(id))`),
+                /foreign key constraint "pr_id_fkey" cannot be implemented: key columns "id" and "id" are of incompatible types: text and uuid/);
+        });
+    });
+
+    describe('search_path', () => {
+        it('reads back through SHOW and current_setting, as postgres prints it', () => {
+            expect(many(`show search_path`)).toEqual([{ search_path: '"$user", public' }]);
+            none(`set search_path to public, extensions`);
+            expect(many(`select current_setting('search_path') as s`)).toEqual([{ s: 'public, extensions' }]);
+            none(`set search_path to default`);
+            expect(many(`show search_path`)).toEqual([{ search_path: '"$user", public' }]);
+        });
+    });
+
     describe('CREATE OR REPLACE TRIGGER', () => {
         it('replaces an existing trigger', () => {
             none(`create table o (id int, n int);

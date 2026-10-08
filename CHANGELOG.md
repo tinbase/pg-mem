@@ -4,6 +4,13 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.5
+
+From a real 4-turn agent build on rapidnative-website's validator.
+
+- Foreign keys between compatible types are accepted, as in postgres: `varchar -> text`, `integer -> bigint`, `integer -> numeric`, ... (they were rejected unless the two types were identical), and enforced, cascades included. Incompatible types (`text -> uuid`) fail with postgres' reason: `foreign key constraint "x" cannot be implemented: key columns "a" and "b" are of incompatible types: text and uuid` (was `Foreign key column type mismatch`).
+- `search_path` exists: `SHOW search_path` / `current_setting('search_path')` return postgres' default `"$user", public`; `SET search_path TO a, b` and `TO DEFAULT` read back as postgres prints them. SET with a list value is stored (it was ignored).
+
 ## 4.0.4
 
 From mutation probes and seeded reads over 120 production projects (validator on PGlite vs pg-mem).
