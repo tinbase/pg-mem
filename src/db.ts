@@ -11,6 +11,7 @@ import { buildFilter } from './transforms/build-filter';
 import { Adapters } from './adapters';
 import { uncacheAll } from './parser/expression-builder';
 import { Transaction } from './transaction';
+import { DEFAULT_SEARCH_PATH } from './execution/set';
 import { buildGroupBy } from './transforms/aggregation';
 import { buildLimit } from './transforms/limit';
 import { buildUnion } from './transforms/union';
@@ -37,7 +38,9 @@ export function newDb(opts?: MemoryDbOptions): IMemoryDb {
     const globals = root.getMap(GLOBAL_VARS)
         .set('server_version', '12.2 (pg-mem)')
         // pg-mem has no timezone support: everything behaves as UTC
-        .set('timezone', 'UTC');
+        .set('timezone', 'UTC')
+        // postgres' default; readable via SHOW / current_setting (pg-mem resolves names its own way)
+        .set('search_path', DEFAULT_SEARCH_PATH);
     root.set(GLOBAL_VARS, globals);
 
     // create db

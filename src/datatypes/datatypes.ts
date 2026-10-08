@@ -967,7 +967,7 @@ export function reconciliateTypes(values: IValue[], nullIfNoMatch?: boolean, str
  * through an explicit cast, so `uuid_col = text_col` is "operator does not exist: uuid = text".
  * Untyped literals and bind parameters are exempt - they are 'unknown' and coerce to anything.
  */
-function typeCategory(t: _IType): string | null {
+export function typeCategory(t: _IType): string | null {
     switch (t.primary) {
         case DataType.text:
         case DataType.citext:
