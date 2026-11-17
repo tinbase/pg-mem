@@ -43,6 +43,35 @@ describe('Triggers', () => {
             .toEqual([{ id: 2, tag: 'small' }, { id: 10, tag: 'big' }]);
     });
 
+    it('BEFORE INSERT sees column DEFAULTs in NEW and keeps them', () => {
+        none(`create table t (
+                   id int primary key,
+                   role text not null default 'x',
+                   created_at timestamptz not null default now(),
+                   updated_at timestamptz not null default now(),
+                   note text default 'n');
+               create function set_role() returns trigger as $$
+                   begin new.role := 'member'; new.updated_at := now(); return new; end;
+               $$ language plpgsql;
+               create trigger t_role before insert on t for each row execute function set_role();
+               insert into t (id) values (1)`);
+        const [row] = many(`select role, created_at, updated_at, note from t`);
+        expect(row.role).toEqual('member');
+        expect(row.created_at).toBeInstanceOf(Date);
+        expect(row.updated_at).toBeInstanceOf(Date);
+        expect(row.note).toEqual('n');
+    });
+
+    it('BEFORE INSERT reads a defaulted column and can null it explicitly', () => {
+        none(`create table t (id int, a text default 'd', b text default 'keep', seen text);
+               create function peek() returns trigger as $$
+                   begin new.seen := new.a; new.b := null; return new; end;
+               $$ language plpgsql;
+               create trigger t_peek before insert on t for each row execute function peek();
+               insert into t (id) values (1)`);
+        expect(many(`select a, b, seen from t`)).toEqual([{ a: 'd', b: null, seen: 'd' }]);
+    });
+
     it('BEFORE INSERT returning NULL skips the row', () => {
         none(`create table t (id int);
                create function no_evens() returns trigger as $$

@@ -4,6 +4,10 @@ Notable changes to `@tinbase/pg-mem`, the tinbase fork of pg-mem.
 
 Released from `main`, which carries the scoped package name. Upstream is tracked through the `upstream` remote (`oguimbal/pg-mem`) rather than a branch; the leftover `master` is vestigial.
 
+## 4.0.6
+
+- BEFORE INSERT row triggers see the column DEFAULTs in `NEW`, as in postgres. Defaults were filled only after the trigger ran, and the trigger's record had already turned every column it was not given into an explicit null, so a table with `created_at timestamptz not null default now()` and any BEFORE INSERT trigger rejected `insert ... (id, name)` with `null value in column "created_at" ... violates not-null constraint`. Seen on a RapidNative app's sign-up in the editor canvas.
+
 ## 4.0.5
 
 From a real 4-turn agent build on rapidnative-website's validator.
