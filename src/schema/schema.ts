@@ -1,7 +1,7 @@
 import { ISchema, DataType, IType, RelationNotFound, Schema, QueryResult, SchemaField, nil, FunctionDefinition, PermissionDeniedError, TypeNotFound, ArgDefDetails, IEquivalentType, QueryInterceptor, ISubscription, QueryError, typeDefToStr, OperatorDefinition, QueryOrAst, IPreparedQuery } from '../interfaces';
 import { _IDb, _ISelection, _ISchema, _Transaction, _ITable, _SelectExplanation, _Explainer, IValue, _IIndex, _IType, _IRelation, QueryObjOpts, _ISequence, _INamedIndex, RegClass, Reg, TypeQuery, asType, _ArgDefDetails, BeingCreated, _FunctionDefinition, _OperatorDefinition } from '../interfaces-private';
 import { asSingleQName, ignore, isType, notNil, parseRegClass, randomString, schemaOf, hasExecutionCtx } from '../utils';
-import { typeSynonyms, Types } from '../datatypes';
+import { catalogTypeNames, typeSynonyms, Types } from '../datatypes';
 import { DropFunctionStatement, BinaryOperator, QName, DataTypeDef, CreateSequenceOptions, CreateExtensionStatement, Statement } from 'pgsql-ast-parser';
 import { MemoryTable } from '../table';
 import { parseSql } from '../parser/parse-cache';
@@ -168,7 +168,7 @@ export class DbSchema implements _ISchema, ISchema {
             return $of.asArray();
         }
         // fetch synonyms
-        const synonym = t.doubleQuoted ? null : typeSynonyms[t.name];
+        const synonym = t.doubleQuoted && !catalogTypeNames.has(t.name) ? null : typeSynonyms[t.name];
         let name: string;
         let ignoreConfig = false;
         if (typeof synonym === 'object' && synonym && 'type' in synonym) {
