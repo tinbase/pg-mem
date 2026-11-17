@@ -899,11 +899,22 @@ function makeTimestamp(primary: DataType, len: number | nil = null) {
 
 
 
+/**
+ * Synonyms that are also real `pg_type.typname`s. Quoting a type name only turns off the SQL
+ * spellings (`"double precision"`, `"character varying"`); a catalog name still resolves when
+ * quoted, as in postgres: `'7'::"int8"`, `'1.5'::"numeric"`. PostgREST-style builders (tinbase)
+ * cast with the quoted `information_schema.udt_name`, which is always one of these.
+ */
+export const catalogTypeNames = new Set([
+    'int2', 'int4', 'int8', 'float4', 'float8', 'numeric', 'varchar', 'bpchar', 'bool', 'oid', 'money',
+]);
+
 export const typeSynonyms: { [key: string]: DataType | { type: DataType; ignoreConfig: boolean } } = {
     'varchar': DataType.text,
     'char': DataType.text,
     'character': DataType.text,
     'character varying': DataType.text,
+    'bpchar': DataType.text,
 
     'int': DataType.integer,
     'int4': DataType.integer,
@@ -921,6 +932,8 @@ export const typeSynonyms: { [key: string]: DataType | { type: DataType; ignoreC
     'numeric': DataType.decimal,
     'money': DataType.decimal,
     'float': DataType.float,
+    'float4': DataType.float,
+    'float8': DataType.float,
     'double precision': DataType.float,
     'real': DataType.float,
 
