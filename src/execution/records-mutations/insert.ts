@@ -205,9 +205,13 @@ export class Insert extends MutationDataSourceBase {
                 //     toInsert[columns[i]] = converted.get();
                 // }
             }
-            // BEFORE INSERT row triggers may modify the row or (returning null) skip it
+            // BEFORE INSERT row triggers may modify the row or (returning null) skip it.
+            // As in postgres, NEW already carries the column DEFAULTs: the trigger's
+            // record turns every column it did not get into an explicit null, so filling
+            // defaults only afterwards would leave e.g. `created_at ... default now()` null.
             let row = toInsert;
             if (this.table.triggers.triggers.length) {
+                this.table.fillDefaults(row, t);
                 row = fireRowTriggers(this.table, 'before', 'insert', toInsert, null, t);
                 if (row === SKIP_ROW) {
                     continue;
